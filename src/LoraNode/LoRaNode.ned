@@ -26,6 +26,13 @@ module LoRaNode
     parameters:
         int numApps = default(0);
         string deploymentType = default("");
+        double minX @unit(m) = default(0m);
+        double maxX @unit(m) = default(1000m);
+        double sepX @unit(m) = default(1000m);
+        double minY @unit(m) = default(0m);
+        double maxY @unit(m) = default(1000m);
+        double sepY @unit(m) = default(1000m);
+        int cols = default(10);
         double maxGatewayDistance = default(320.0);
         double gatewayX = default(320.0);
         double gatewayY = default(320.0);
@@ -36,7 +43,7 @@ module LoRaNode
         interfaceTable: InterfaceTable {
             @display("p=30,26");
         }
-        mobility: StationaryMobility {
+        mobility: StationaryMobilityMut {
             @display("p=24,88");
         }
         LoRaNic: LoRaNic {

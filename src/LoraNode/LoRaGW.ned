@@ -21,7 +21,6 @@ import inet.networklayer.common.InterfaceTable;
 import inet.networklayer.contract.INetworkLayer;
 import inet.linklayer.loopback.LoopbackInterface;
 import flora.LoRa.LoRaGWNic;
-import flora.LoRaApp.SimpleLoRaApp;
 import flora.LoRa.PacketForwarder;
 import inet.linklayer.contract.IEthernetInterface;
 import inet.applications.contract.IApp;

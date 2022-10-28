@@ -71,6 +71,11 @@ const ITransmission *LoRaTransmitter::createTransmission(const IRadio *transmitt
     int payloadBytes = 0;
     if(iAmGateway) payloadBytes = 15;
     else payloadBytes = 20;
+    // Use the actual payload size
+    if (frame->getChunkLength() >= B(0)) {
+        payloadBytes = B(frame->getChunkLength()).get();
+    }
+
     int payloadSymbNb = 8;
     payloadSymbNb += std::ceil((8*payloadBytes - 4*frame->getSpreadFactor() + 28 + 16 - 20*0)/(4*(frame->getSpreadFactor()-2*0)))*(frame->getCodeRendundance() + 4);
     if(payloadSymbNb < 8) payloadSymbNb = 8;

@@ -52,6 +52,9 @@ public:
   int loRaCR;
   bool loRaUseHeader;
 
+  bool loRaCAD;
+  double loRaCADatt;
+
 private:
   void parseRadioModeSwitchingTimes();
   void startRadioModeSwitch(RadioMode newRadioMode, simtime_t switchingTime);

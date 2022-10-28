@@ -8,6 +8,7 @@
 #include "inet/queueing/contract/IPacketQueue.h"
 #include "LoRaMacControlInfo_m.h"
 #include "LoRaMacFrame_m.h"
+#include "LoRaApp/LoRaAppPacket_m.h"
 #include "inet/common/Protocol.h"
 #include "inet/queueing/contract/IActivePacketSink.h"
 #include "inet/queueing/contract/IPacketQueue.h"
@@ -83,7 +84,7 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     IRadio::TransmissionState transmissionState = IRadio::TRANSMISSION_STATE_UNDEFINED;
     IRadio::ReceptionState receptionState = IRadio::RECEPTION_STATE_UNDEFINED;
 
-    cFSM fsm;
+    // cFSM fsm;
 
     /** Remaining backoff period in seconds */
     simtime_t backoffPeriod = -1;
@@ -148,6 +149,8 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     virtual queueing::IPassivePacketSource *getProvider(cGate *gate) override;
     virtual void handleCanPullPacketChanged(cGate *gate) override;
     virtual void handlePullPacketProcessed(Packet *packet, cGate *gate, bool successful) override;
+
+    cFSM fsm;
 
   protected:
     /**

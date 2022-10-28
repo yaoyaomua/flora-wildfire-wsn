@@ -80,17 +80,19 @@ void LoRaMediumCache::initialize(int stage)
 {
     if (stage == INITSTAGE_LOCAL) {
         radioMedium = check_and_cast<LoRaMedium *>(getParentModule());
-        WATCH(minConstraintArea);
-        WATCH(maxConstraintArea);
-        WATCH(maxSpeed);
-        WATCH(maxTransmissionPower);
-        WATCH(minInterferencePower);
-        WATCH(minReceptionPower);
-        WATCH(maxAntennaGain);
-        WATCH(minInterferenceTime);
-        WATCH(maxTransmissionDuration);
-        WATCH(maxCommunicationRange);
-        WATCH(maxInterferenceRange);
+	if (getEnvir()->isGUI()) {
+            WATCH(minConstraintArea);
+            WATCH(maxConstraintArea);
+            WATCH(maxSpeed);
+            WATCH(maxTransmissionPower);
+            WATCH(minInterferencePower);
+            WATCH(minReceptionPower);
+            WATCH(maxAntennaGain);
+            WATCH(minInterferenceTime);
+            WATCH(maxTransmissionDuration);
+            WATCH(maxCommunicationRange);
+            WATCH(maxInterferenceRange);
+	}
     }
 }
 

@@ -18,7 +18,12 @@
 //
 
 import inet.common.INETDefs;
+import inet.common.Units;
 import inet.common.packet.chunk.Chunk;
+
+cplusplus {{
+using namespace inet;
+}}
 
 namespace flora;
 
@@ -28,20 +33,38 @@ enum AppPacketType
     JOIN_REPLY = 2;
     DATA = 3;
     TXCONFIG = 4;
+    ACK = 5;
+    ROUTING = 6;
 }
 
 class LoRaOptions {
     double LoRaTP = -1;
-    double LoRaCF = -1;
+    inet::Hz LoRaCF;
     int LoRaSF = -1;
-    double LoRaBW = -1;
+    inet::Hz LoRaBW;
     int LoRaCR = -1;
+    double RSSI;
     bool UseHeader = true;
     bool ADRACKReq = false;
+    bool AppACKReq;
+}
+
+class LoRaRoute {
+    int id;
+    int priMetric;
+    int secMetric;
 }
 
 class LoRaAppPacket extends inet::FieldsChunk {
     int msgType @enum(AppPacketType);
     int sampleMeasurement;
+    int dataInt;
     LoRaOptions options;
+    int source;
+    int destination;
+    int ttl;
+    int via;
+    int buffer;
+	LoRaRoute routingTable[];
+	simtime_t departureTime;
 }

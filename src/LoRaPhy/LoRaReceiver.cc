@@ -16,7 +16,6 @@
 #include "LoRaReceiver.h"
 #include "LoRaReception.h"
 #include "inet/physicallayer/wireless/common/analogmodel/packetlevel/ScalarNoise.h"
-#include "../LoRaApp/SimpleLoRaApp.h"
 #include "LoRaPhyPreamble_m.h"
 #include "inet/physicallayer/wireless/common/contract/packetlevel/SignalTag_m.h"
 
@@ -58,11 +57,12 @@ bool LoRaReceiver::computeIsReceptionPossible(const IListening *listening, const
 {
     //here we can check compatibility of LoRaTx parameters (or beeing a gateway)
     const LoRaTransmission *loRaTransmission = check_and_cast<const LoRaTransmission *>(transmission);
-//    auto *loRaApp = check_and_cast<SimpleLoRaApp *>(getParentModule()->getParentModule()->getSubmodule("SimpleLoRaApp"));
-    auto *loRaRadio = check_and_cast<LoRaRadio *>(getParentModule());
-//    auto node = getContainingNode(this);
-//    auto loRaRadio = check_and_cast<LoRaRadio *>(node->getSubmodule("LoRaNic")->getSubmodule("LoRaRadio"));
-    if(iAmGateway || (loRaTransmission->getLoRaCF() == loRaRadio->loRaCF && loRaTransmission->getLoRaBW() == loRaRadio->loRaBW && loRaTransmission->getLoRaSF() == loRaRadio->loRaSF))
+    LoRaRadio *loRaRadio = nullptr;
+
+    if (iAmGateway == false) {
+        loRaRadio = check_and_cast<LoRaRadio *>(getParentModule());
+    }
+    if (iAmGateway || (loRaTransmission->getLoRaCF() == loRaRadio->loRaCF && loRaTransmission->getLoRaBW() == loRaRadio->loRaBW && loRaTransmission->getLoRaSF() == loRaRadio->loRaSF))
         return true;
     else
         return false;
@@ -70,10 +70,15 @@ bool LoRaReceiver::computeIsReceptionPossible(const IListening *listening, const
 
 bool LoRaReceiver::computeIsReceptionPossible(const IListening *listening, const IReception *reception, IRadioSignal::SignalPart part) const
 {
-    //here we can check compatibility of LoRaTx parameters (or beeing a gateway) and reception above sensitivity level
+    //here we can check compatibility of LoRaTx parameters (or being a gateway) and reception above sensitivity level
     const LoRaBandListening *loRaListening = check_and_cast<const LoRaBandListening *>(listening);
     const LoRaReception *loRaReception = check_and_cast<const LoRaReception *>(reception);
-    if (iAmGateway == false && (loRaListening->getLoRaCF() != loRaReception->getLoRaCF() || loRaListening->getLoRaBW() != loRaReception->getLoRaBW() || loRaListening->getLoRaSF() != loRaReception->getLoRaSF())) {
+    LoRaRadio *loRaRadio = nullptr;
+
+    if (iAmGateway == false) {
+        loRaRadio = check_and_cast<LoRaRadio *>(getParentModule());
+    }
+    if (iAmGateway == false && (loRaListening->getLoRaCF() != loRaReception->getLoRaCF() || loRaListening->getLoRaBW() != loRaReception->getLoRaBW() || (loRaRadio->loRaCAD == false && loRaListening->getLoRaSF() != loRaReception->getLoRaSF()))) {
         return false;
     } else {
         W minReceptionPower = loRaReception->computeMinPower(reception->getStartTime(part), reception->getEndTime(part));
@@ -262,7 +267,6 @@ const IListening *LoRaReceiver::createListening(const IRadio *radio, const simti
     if(iAmGateway == false)
     {
         auto node = getContainingNode(this);
-//        auto loRaApp = check_and_cast<SimpleLoRaApp *>(node->getSubmodule("SimpleLoRaApp"));
         auto loRaRadio = check_and_cast<LoRaRadio *>(node->getSubmodule("LoRaNic")->getSubmodule("radio"));
         return new LoRaBandListening(radio, startTime, endTime, startPosition, endPosition, loRaRadio->loRaCF, loRaRadio->loRaBW, loRaRadio->loRaSF);
     }
@@ -290,49 +294,64 @@ W LoRaReceiver::getSensitivity(const LoRaReception *reception) const
     //function returns sensitivity -- according to LoRa documentation, it changes with LoRa parameters
     //Sensitivity values from Semtech SX1272/73 datasheet, table 10, Rev 3.1, March 2017
     W sensitivity = W(math::dBmW2mW(-126.5) / 1000);
+
+    // When CAD (channel activity detection) is used to automatically switch the receiver to the
+    // appropriate SF the incoming transmission is using (this is implemented in different
+    // projects (e.g. Single Channel LoRaWAN Gateway https://github.com/things4u/ESP-1ch-Gateway),
+    // the receiver seems to have its sensitivity reduced (several dB, as tested on a LiyGo TTGO
+    // LoRa32 v1.6 device). Therefore, a certain attenuation can be configured on the LoRaNodeApp
+    // to be taken into account here.
+
+    double loRaCADatt = 0;
+
+    if (iAmGateway == false) {
+        auto *loRaRadio = check_and_cast<LoRaRadio *>(getParentModule());
+        if (loRaRadio->loRaCAD) {
+            loRaCADatt = loRaRadio->loRaCADatt;
+        }
+    }
+
     if(reception->getLoRaSF() == 6)
     {
-        if(reception->getLoRaBW() == Hz(125000)) sensitivity = W(math::dBmW2mW(-121) / 1000);
-        if(reception->getLoRaBW() == Hz(250000)) sensitivity = W(math::dBmW2mW(-118) / 1000);
-        if(reception->getLoRaBW() == Hz(500000)) sensitivity = W(math::dBmW2mW(-111) / 1000);
+        if(reception->getLoRaBW() == Hz(125000)) sensitivity = W(math::dBmW2mW(-121 + loRaCADatt) / 1000);
+        else if(reception->getLoRaBW() == Hz(250000)) sensitivity = W(math::dBmW2mW(-118 + loRaCADatt) / 1000);
+        else if(reception->getLoRaBW() == Hz(500000)) sensitivity = W(math::dBmW2mW(-111 + loRaCADatt) / 1000);
     }
-
-    if (reception->getLoRaSF() == 7)
+    else if (reception->getLoRaSF() == 7)
     {
-        if(reception->getLoRaBW() == Hz(125000)) sensitivity = W(math::dBmW2mW(-124) / 1000);
-        if(reception->getLoRaBW() == Hz(250000)) sensitivity = W(math::dBmW2mW(-122) / 1000);
-        if(reception->getLoRaBW() == Hz(500000)) sensitivity = W(math::dBmW2mW(-116) / 1000);
+        if(reception->getLoRaBW() == Hz(125000)) sensitivity = W(math::dBmW2mW(-124 + loRaCADatt) / 1000);
+        if(reception->getLoRaBW() == Hz(250000)) sensitivity = W(math::dBmW2mW(-122 + loRaCADatt) / 1000);
+        if(reception->getLoRaBW() == Hz(500000)) sensitivity = W(math::dBmW2mW(-116 + loRaCADatt) / 1000);
     }
-
-    if(reception->getLoRaSF() == 8)
+    else if(reception->getLoRaSF() == 8)
     {
-        if(reception->getLoRaBW() == Hz(125000)) sensitivity = W(math::dBmW2mW(-127) / 1000);
-        if(reception->getLoRaBW() == Hz(250000)) sensitivity = W(math::dBmW2mW(-125) / 1000);
-        if(reception->getLoRaBW() == Hz(500000)) sensitivity = W(math::dBmW2mW(-119) / 1000);
+        if(reception->getLoRaBW() == Hz(125000)) sensitivity = W(math::dBmW2mW(-127 + loRaCADatt) / 1000);
+        else if(reception->getLoRaBW() == Hz(250000)) sensitivity = W(math::dBmW2mW(-125 + loRaCADatt) / 1000);
+        else if(reception->getLoRaBW() == Hz(500000)) sensitivity = W(math::dBmW2mW(-119 + loRaCADatt) / 1000);
     }
-    if(reception->getLoRaSF() == 9)
+    else if(reception->getLoRaSF() == 9)
     {
-        if(reception->getLoRaBW() == Hz(125000)) sensitivity = W(math::dBmW2mW(-130) / 1000);
-        if(reception->getLoRaBW() == Hz(250000)) sensitivity = W(math::dBmW2mW(-128) / 1000);
-        if(reception->getLoRaBW() == Hz(500000)) sensitivity = W(math::dBmW2mW(-122) / 1000);
+        if(reception->getLoRaBW() == Hz(125000)) sensitivity = W(math::dBmW2mW(-130 + loRaCADatt) / 1000);
+        else if(reception->getLoRaBW() == Hz(250000)) sensitivity = W(math::dBmW2mW(-128 + loRaCADatt) / 1000);
+        else if(reception->getLoRaBW() == Hz(500000)) sensitivity = W(math::dBmW2mW(-122 + loRaCADatt) / 1000);
     }
-    if(reception->getLoRaSF() == 10)
+    else if(reception->getLoRaSF() == 10)
     {
-        if(reception->getLoRaBW() == Hz(125000)) sensitivity = W(math::dBmW2mW(-133) / 1000);
-        if(reception->getLoRaBW() == Hz(250000)) sensitivity = W(math::dBmW2mW(-130) / 1000);
-        if(reception->getLoRaBW() == Hz(500000)) sensitivity = W(math::dBmW2mW(-125) / 1000);
+        if(reception->getLoRaBW() == Hz(125000)) sensitivity = W(math::dBmW2mW(-133 + loRaCADatt) / 1000);
+        else if(reception->getLoRaBW() == Hz(250000)) sensitivity = W(math::dBmW2mW(-130 + loRaCADatt) / 1000);
+        else if(reception->getLoRaBW() == Hz(500000)) sensitivity = W(math::dBmW2mW(-125 + loRaCADatt) / 1000);
     }
-    if(reception->getLoRaSF() == 11)
+    else if(reception->getLoRaSF() == 11)
     {
-        if(reception->getLoRaBW() == Hz(125000)) sensitivity = W(math::dBmW2mW(-135) / 1000);
-        if(reception->getLoRaBW() == Hz(250000)) sensitivity = W(math::dBmW2mW(-132) / 1000);
-        if(reception->getLoRaBW() == Hz(500000)) sensitivity = W(math::dBmW2mW(-128) / 1000);
+        if(reception->getLoRaBW() == Hz(125000)) sensitivity = W(math::dBmW2mW(-135 + loRaCADatt) / 1000);
+        else if(reception->getLoRaBW() == Hz(250000)) sensitivity = W(math::dBmW2mW(-132 + loRaCADatt) / 1000);
+        else if(reception->getLoRaBW() == Hz(500000)) sensitivity = W(math::dBmW2mW(-128 + loRaCADatt) / 1000);
     }
-    if(reception->getLoRaSF() == 12)
+    else if(reception->getLoRaSF() == 12)
     {
-        if(reception->getLoRaBW() == Hz(125000)) sensitivity = W(math::dBmW2mW(-137) / 1000);
-        if(reception->getLoRaBW() == Hz(250000)) sensitivity = W(math::dBmW2mW(-135) / 1000);
-        if(reception->getLoRaBW() == Hz(500000)) sensitivity = W(math::dBmW2mW(-129) / 1000);
+        if(reception->getLoRaBW() == Hz(125000)) sensitivity = W(math::dBmW2mW(-137 + loRaCADatt) / 1000);
+        else if(reception->getLoRaBW() == Hz(250000)) sensitivity = W(math::dBmW2mW(-135 + loRaCADatt) / 1000);
+        else if(reception->getLoRaBW() == Hz(500000)) sensitivity = W(math::dBmW2mW(-129 + loRaCADatt) / 1000);
     }
     return sensitivity;
 }

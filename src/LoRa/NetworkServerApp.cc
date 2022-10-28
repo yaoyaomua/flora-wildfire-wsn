@@ -43,13 +43,30 @@ void NetworkServerApp::initialize(int stage)
         startUDP();
         getSimulation()->getSystemModule()->subscribe("LoRa_AppPacketSent", this);
         evaluateADRinServer = par("evaluateADRinServer");
+        collectForwardingStats = true;
+        acknowledgePackets = par("acknowledgePackets");
         adrDeviceMargin = par("adrDeviceMargin");
         receivedRSSI.setName("Received RSSI");
         totalReceivedPackets = 0;
+        allReceivedNodes = {};
+        directReceivedNodes = {};
+        forwardedNodes = {};
+        forwardingNodes = {};
+        ACKReqNodes = {};
+        ACKedNodes = {};
         for(int i=0;i<6;i++)
         {
             counterUniqueReceivedPacketsPerSF[i] = 0;
             counterOfSentPacketsFromNodesPerSF[i] = 0;
+        }
+        if (getEnvir()->isGUI()) {
+            //Watches
+            WATCH_VECTOR(allReceivedNodes);
+            WATCH_VECTOR(directReceivedNodes);
+            WATCH_VECTOR(forwardedNodes);
+            WATCH_VECTOR(forwardingNodes);
+            WATCH_VECTOR(ACKReqNodes);
+            WATCH_VECTOR(ACKedNodes);
         }
     }
 }
@@ -104,6 +121,7 @@ void NetworkServerApp::finish()
         delete knownNodes[i].receivedSeqNumber;
         delete knownNodes[i].calculatedSNRmargin;
         recordScalar("Send ADR for node", knownNodes[i].numberOfSentADRPackets);
+        recordScalar("Send ACK for node", knownNodes[i].numberOfSentACKPackets);
     }
     for (std::map<int,int>::iterator it=numReceivedPerNode.begin(); it != numReceivedPerNode.end(); ++it)
     {
@@ -163,6 +181,28 @@ void NetworkServerApp::finish()
         recordScalar("DER SF12", double(counterUniqueReceivedPacketsPerSF[5]) / counterOfSentPacketsFromNodesPerSF[5]);
     else
         recordScalar("DER SF12", 0);
+
+    recordScalar("allReceivedNodes", allReceivedNodes.size());
+    recordScalar("directReceivedNodes", directReceivedNodes.size());
+    recordScalar("forwardedNodes", forwardedNodes.size());
+    recordScalar("forwardingNodes", forwardingNodes.size());
+    recordScalar("ACKReqNodes", ACKReqNodes.size());
+    recordScalar("ACKedNodes", ACKedNodes.size());
+
+    std::vector<int> directOnlyNodes;
+    std::vector<int> forwardedOnlyNodes;
+
+    for (std::vector<int>::iterator allptr = allReceivedNodes.begin(); allptr < allReceivedNodes.end(); allptr++) {
+        if ( !isForwardedNode(*allptr) ) {
+            directOnlyNodes.push_back(*allptr);
+        }
+        else if ( !isDirectReceivedNode(*allptr) ) {
+            forwardedOnlyNodes.push_back(*allptr);
+        }
+    }
+
+    recordScalar("directOnlyNodes", directOnlyNodes.size());
+    recordScalar("forwardedOnlyNodes", forwardedOnlyNodes.size());
 }
 
 bool NetworkServerApp::isPacketProcessed(const Ptr<const LoRaMacFrame> &pkt)
@@ -197,6 +237,7 @@ void NetworkServerApp::updateKnownNodes(Packet* pkt)
         newNode.lastSeqNoProcessed = frame->getSequenceNumber();
         newNode.framesFromLastADRCommand = 0;
         newNode.numberOfSentADRPackets = 0;
+        newNode.numberOfSentACKPackets = 0;
         newNode.historyAllSNIR = new cOutVector;
         newNode.historyAllSNIR->setName("Vector of SNIR per node");
         //newNode.historyAllSNIR->record(pkt->getSNIR());
@@ -288,13 +329,122 @@ void NetworkServerApp::processScheduledPacket(cMessage* selfMsg)
         counterUniqueReceivedPackets++;
     }
     receivedRSSI.collect(frame->getRSSI());
+    if(collectForwardingStats)
+    {
+        Packet *pktCopy = pkt->dup();
+        forwardingStats(pktCopy);
+        delete pktCopy;
+    }
     if(evaluateADRinServer)
     {
         evaluateADR(pkt, pickedGateway, SNIRinGW, RSSIinGW);
     }
+    if(acknowledgePackets)
+    {
+        acknowledgePacket(pkt, pickedGateway, SNIRinGW, RSSIinGW);
+    }
     delete receivedPackets[packetNumber].rcvdPacket;
     delete selfMsg;
     receivedPackets.erase(receivedPackets.begin()+packetNumber);
+}
+
+void NetworkServerApp::acknowledgePacket(Packet* pkt, L3Address pickedGateway, double SNIRinGW, double RSSIinGW)
+{
+    int nodeIndex;
+
+    pkt->trimFront();
+    auto frame = pkt->removeAtFront<LoRaMacFrame>();
+    const auto & rcvAppPacket = pkt->peekAtFront<LoRaAppPacket>();
+
+    for(uint i=0;i<knownNodes.size();i++)
+    {
+        if(knownNodes[i].srcAddr == frame->getTransmitterAddress())
+        {
+            nodeIndex = i;
+        }
+    }
+
+    if(rcvAppPacket->getOptions().getAppACKReq())
+    {
+        if(!isACKedNode(rcvAppPacket->getVia()))
+        {
+            ACKedNodes.push_back(rcvAppPacket->getVia());
+        }
+
+        auto mgmtPacket = makeShared<LoRaAppPacket>();
+        mgmtPacket->setMsgType(ACK);
+        mgmtPacket->setDestination(rcvAppPacket->getSource());
+        mgmtPacket->setSource(-1);
+        mgmtPacket->setDataInt(rcvAppPacket->getDataInt());
+        mgmtPacket->setChunkLength(B(par("headerLength").intValue()));
+
+        auto frameToSend = makeShared<LoRaMacFrame>();
+        frameToSend->setChunkLength(B(par("headerLength").intValue()));
+        frameToSend->setReceiverAddress(frame->getTransmitterAddress());
+        //FIXME: What value to set for LoRa TP
+        //frameToSend->setLoRaTP(pkt->getLoRaTP());
+        frameToSend->setLoRaTP(math::dBmW2mW(14));
+        frameToSend->setLoRaCF(frame->getLoRaCF());
+        frameToSend->setLoRaSF(frame->getLoRaSF());
+        frameToSend->setLoRaBW(frame->getLoRaBW());
+
+        auto pktAux = new Packet("ACKcommand");
+
+        pktAux->insertAtFront(mgmtPacket);
+        pktAux->insertAtFront(frameToSend);
+
+        // char text[32];
+        // sprintf(text, "Nodeindex is #%d", nodeIndex);
+        // bubble(text);
+
+        if(simTime() >= getSimulation()->getWarmupPeriod())
+        {
+            knownNodes[nodeIndex].numberOfSentACKPackets++;
+        }
+        socket.sendTo(pktAux, pickedGateway, destPort);
+    }
+}
+
+void NetworkServerApp::forwardingStats(Packet* pkt)
+{
+    pkt->trimFront();
+    auto frame = pkt->removeAtFront<LoRaMacFrame>();
+    const auto & rcvAppPacket = pkt->peekAtFront<LoRaAppPacket>();
+
+    if(rcvAppPacket->getOptions().getAppACKReq())
+    {
+        if(!isACKReqNode(rcvAppPacket->getVia()))
+        {
+            ACKReqNodes.push_back(rcvAppPacket->getVia());
+        }
+    }
+    // Add source node to the list of all received nodes
+    if (!isAllReceivedNode(rcvAppPacket->getSource()))
+    {
+        allReceivedNodes.push_back(rcvAppPacket->getSource());
+    }
+
+    // If it's a direct packet, add it do the list of directly-received nodes
+    if (rcvAppPacket->getSource() == rcvAppPacket->getVia() )
+    {
+        if (!isDirectReceivedNode(rcvAppPacket->getSource()))
+        {
+            directReceivedNodes.push_back(rcvAppPacket->getSource());
+        }
+    }
+    // Else, if it's a forwarded packet
+    else
+    {   // Add the forwarding node
+        if (!isForwardingNode(rcvAppPacket->getVia()))
+        {
+            forwardingNodes.push_back(rcvAppPacket->getVia());
+        }
+        // Add the forwarded node
+        if (!isForwardedNode(rcvAppPacket->getSource()))
+        {
+            forwardedNodes.push_back(rcvAppPacket->getSource());
+        }
+    }
 }
 
 void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double SNIRinGW, double RSSIinGW)
@@ -441,6 +591,66 @@ void NetworkServerApp::receiveSignal(cComponent *source, simsignal_t signalID, i
         counterOfSentPacketsFromNodes++;
         counterOfSentPacketsFromNodesPerSF[value-7]++;
     }
+}
+
+bool NetworkServerApp::isForwardedNode(int nodeId)
+{
+    for (std::vector<int>::iterator fwdptr = forwardedNodes.begin(); fwdptr < forwardedNodes.end(); fwdptr++) {
+        if ( nodeId == *fwdptr ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool NetworkServerApp::isForwardingNode(int nodeId)
+{
+    for (std::vector<int>::iterator fwrptr = forwardingNodes.begin(); fwrptr < forwardingNodes.end(); fwrptr++) {
+        if ( nodeId == *fwrptr ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool NetworkServerApp::isAllReceivedNode(int nodeId)
+{
+    for (std::vector<int>::iterator rcvdptr = allReceivedNodes.begin(); rcvdptr < allReceivedNodes.end(); rcvdptr++) {
+        if ( nodeId == *rcvdptr ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool NetworkServerApp::isDirectReceivedNode(int nodeId)
+{
+    for (std::vector<int>::iterator lrcvdptr = directReceivedNodes.begin(); lrcvdptr < directReceivedNodes.end(); lrcvdptr++) {
+        if ( nodeId == *lrcvdptr ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool NetworkServerApp::isACKedNode(int nodeId)
+{
+    for (std::vector<int>::iterator ackdptr = ACKedNodes.begin(); ackdptr < ACKedNodes.end(); ackdptr++) {
+        if ( nodeId == *ackdptr ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool NetworkServerApp::isACKReqNode(int nodeId)
+{
+    for (std::vector<int>::iterator ackrqptr = ACKReqNodes.begin(); ackrqptr < ACKReqNodes.end(); ackrqptr++) {
+        if ( nodeId == *ackrqptr ) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } //namespace inet

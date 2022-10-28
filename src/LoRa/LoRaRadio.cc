@@ -196,7 +196,7 @@ void LoRaRadio::handleUpperPacket(Packet *packet)
         auto signalPowerReq = packet->addTagIfAbsent<SignalPowerReq>();
         signalPowerReq->setPower(tag->getPower());
 
-        preamble->setChunkLength(b(16));
+        preamble->setChunkLength(B(16));
         packet->insertAtFront(preamble);
 
         if (transmissionTimer->isScheduled())
@@ -412,6 +412,18 @@ void LoRaRadio::endReception(cMessage *timer)
         auto isReceptionSuccessful = medium->getReceptionDecision(this, signal->getListening(), transmission, part)->isReceptionSuccessful();
         EV_INFO << "Reception ended: " << (isReceptionSuccessful ? "\x1b[1msuccessfully\x1b[0m" : "\x1b[1munsuccessfully\x1b[0m") << " for " << (IWirelessSignal *)signal << " " << IRadioSignal::getSignalPartName(part) << " as " << reception << endl;
         auto macFrame = medium->receivePacket(this, signal);
+        auto rxinfo = reception->getCompleteStringRepresentation();
+        auto powerpos = rxinfo.find("power");
+        auto powerp = rxinfo.substr(powerpos);
+        auto powercpos = powerp.find(",");
+        auto powerneq = powerp.substr(8, powercpos);
+        auto power = powerneq.substr(0, powerneq.find(",")-2);
+
+        cMsgPar *powerpar = new cMsgPar("rssi");
+        powerpar->setDoubleValue(math::mW2dBmW(atof(power.c_str())));
+
+        macFrame->addObject(powerpar);
+
         take(macFrame);
         decapsulate(macFrame);
         if (isReceptionSuccessful)
@@ -496,6 +508,10 @@ void LoRaRadio::captureReception(cMessage *timer)
 
 void LoRaRadio::sendUp(Packet *macFrame)
 {
+    macFrame->updateAtFront<LoRaMacFrame>([&] (const Ptr<LoRaMacFrame>& loraHeader) {
+        loraHeader->setRSSI(macFrame->par("rssi"));
+    });
+
     auto signalPowerInd = macFrame->findTag<SignalPowerInd>();
     if (signalPowerInd == nullptr)
         throw cRuntimeError("signal Power indication not present");
@@ -514,7 +530,6 @@ void LoRaRadio::sendUp(Packet *macFrame)
         emit(symbolErrorRateSignal, errorTag->getSymbolErrorRate());
     EV_INFO << "Sending up " << macFrame << endl;
     NarrowbandRadioBase::sendUp(macFrame);
-    //send(macFrame, upperLayerOut);
 }
 
 //double LoRaRadio::getCurrentTxPower()

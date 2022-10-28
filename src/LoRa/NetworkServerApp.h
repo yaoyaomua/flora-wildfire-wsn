@@ -39,6 +39,7 @@ public:
     int framesFromLastADRCommand;
     int lastSeqNoProcessed;
     int numberOfSentADRPackets;
+    int numberOfSentACKPackets;
     std::list<double> adrListSNIR;
     cOutVector *historyAllSNIR;
     cOutVector *historyAllRSSI;
@@ -76,6 +77,13 @@ class NetworkServerApp : public cSimpleModule, cListener
     double adrDeviceMargin;
     std::map<int, int> numReceivedPerNode;
 
+    std::vector<int> allReceivedNodes;
+    std::vector<int> directReceivedNodes;
+    std::vector<int> forwardedNodes;
+    std::vector<int> forwardingNodes;
+    std::vector<int> ACKReqNodes;
+    std::vector<int> ACKedNodes;
+
   protected:
     virtual void initialize(int stage) override;
     virtual void handleMessage(cMessage *msg) override;
@@ -89,8 +97,19 @@ class NetworkServerApp : public cSimpleModule, cListener
     void addPktToProcessingTable(Packet* pkt);
     void processScheduledPacket(cMessage* selfMsg);
     void evaluateADR(Packet *pkt, L3Address pickedGateway, double SNIRinGW, double RSSIinGW);
+    void acknowledgePacket(Packet *pkt, L3Address pickedGateway, double SNIRinGW, double RSSIinGW);
+    void forwardingStats(Packet* pkt);
     void receiveSignal(cComponent *source, simsignal_t signalID, intval_t value, cObject *details) override;
     bool evaluateADRinServer;
+    bool acknowledgePackets;
+    bool collectForwardingStats;
+
+    bool isForwardedNode(int nodeId);
+    bool isForwardingNode(int nodeId);
+    bool isAllReceivedNode(int nodeId);
+    bool isDirectReceivedNode(int nodeId);
+    bool isACKedNode(int nodeId);
+    bool isACKReqNode(int nodeId);
 
     cHistogram receivedRSSI;
   public:

@@ -97,7 +97,7 @@ void LoRaGWRadio::handleUpperPacket(Packet *packet)
     auto signalPowerReq = packet->addTagIfAbsent<SignalPowerReq>();
     signalPowerReq->setPower(mW(frame->getLoRaTP()));
 //
-    preamble->setChunkLength(b(16));
+    preamble->setChunkLength(B(16));
     packet->insertAtFront(preamble);
     EV << "Wysylam " << preamble->getPower() << " " << preamble->getSpreadFactor() << endl;
 
@@ -265,8 +265,13 @@ void LoRaGWRadio::endReception(cMessage *timer)
         receptionTimer = nullptr;
         if(iAmGateway) concurrentReceptions.remove(timer);
     }
-    else
+    else {
         EV_INFO << "LoRaGWRadio Reception ended: ignoring " << (IWirelessSignal *)radioFrame << " " << IRadioSignal::getSignalPartName(part) << " as " << reception << endl;
+        EV_INFO << "LoRaGWRadio Reception ended: ignoring because timer == receptionTimer: " << timer << " == " << receptionTimer << endl;
+        EV_INFO << "LoRaGWRadio Reception ended: ignoring because isReceiverMode(radioMode): " << isReceiverMode(radioMode) << endl;
+        EV_INFO << "LoRaGWRadio Reception ended: ignoring because arrival->getEndTime() == simTime(): " << arrival->getEndTime() << " == " << simTime() << endl;
+        EV_INFO << "LoRaGWRadio Reception ended: ignoring because iAmTransmiting: " << iAmTransmiting << endl;
+    }
     //updateTransceiverState();
     //updateTransceiverPart();
     radioMode = RADIO_MODE_TRANSCEIVER;
