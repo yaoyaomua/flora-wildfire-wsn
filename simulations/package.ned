@@ -8,6 +8,7 @@ import flora.LoraNode.LoRaNode;
 import flora.LoraNode.LoRaGW;
 import inet.node.inet.StandardHost;
 import inet.networklayer.configurator.ipv4.Ipv4NetworkConfigurator;
+import inet.visualizer.contract.IIntegratedVisualizer;
 import inet.node.ethernet.Eth1G;
 
 @license(LGPL);
@@ -110,6 +111,9 @@ network LoRaMesh
         networkServer: StandardHost {
             parameters:
                 @display("p=850,-100");
+        }
+        visualizer: <default(firstAvailableOrEmpty("IntegratedCanvasVisualizer"))> like IIntegratedVisualizer if typename != "" {
+            @display("p=580,125");
         }
         configurator: Ipv4NetworkConfigurator {
             parameters:

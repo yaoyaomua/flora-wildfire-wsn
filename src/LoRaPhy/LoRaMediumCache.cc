@@ -248,12 +248,12 @@ m LoRaMediumCache::getMaxInterferenceRange(const IRadio* radio) const
 
 m LoRaMediumCache::getMaxCommunicationRange(const IRadio* radio) const
 {
-    if (strcmp(radioMedium->par("pathLossType").stringValue(), "LoRaLogNormalShadowing") == 0) {
+    //if (strcmp(radioMedium->par("pathLossType").stringValue(), "LoRaLogNormalShadowing") == 0) {
         LoRaLogNormalShadowing *loraLogNormalShadowing;
         loraLogNormalShadowing = check_and_cast<LoRaLogNormalShadowing *>(radioMedium->getSubmodule("pathLoss"));
         return(loraLogNormalShadowing->computeRange(maxTransmissionPower));
-    }
-    throw cRuntimeError("Unknown pathLossType. Only LoRaLogNormalShadowing is supported by the LoRaMediumCache.");
+    //}
+    //throw cRuntimeError("Unknown pathLossType. Only LoRaLogNormalShadowing is supported by the LoRaMediumCache.");
 }
 
 } // namespace inet
