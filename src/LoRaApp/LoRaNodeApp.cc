@@ -336,7 +336,7 @@ void LoRaNodeApp::initialize(int stage) {
         if (numberOfDestinationsPerNode == 0 ) {
             numberOfDestinationsPerNode = numberOfNodes-1;
         }
-        generateDataPackets();
+        generateDataPackets2();
 
         // Routing packets timer
         timeToFirstRoutingPacket = math::maxnan(5.0, (double)par("timeToFirstRoutingPacket"))+getTimeToNextRoutingPacket();
@@ -1343,7 +1343,7 @@ simtime_t LoRaNodeApp::sendDataPacket() {
 
     // Generate more packets if needed
     if (sendPacketsContinuously && LoRaPacketsToSend.size() == 0) {
-        generateDataPackets();
+        generateDataPackets2();
     }
 
     return txDuration;
@@ -1546,6 +1546,39 @@ void LoRaNodeApp::generateDataPackets() {
             currDataInt++;
         }
     }
+}
+
+void LoRaNodeApp::generateDataPackets2() {
+
+    if (nodeId == 0) {
+        int destination = 2;
+
+        for (int k = 0; k < numberOfPacketsPerDestination; k++) {
+                auto dataPacket = makeShared<LoRaAppPacket>();
+
+                dataPacket->setMsgType(DATA);
+                dataPacket->setDataInt(currDataInt+k);
+                dataPacket->setSource(nodeId);
+                dataPacket->setVia(nodeId);
+                dataPacket->setDestination(destination);
+                LoRaOptions opts = dataPacket->getOptions();
+                opts.setAppACKReq(requestACKfromApp);
+                dataPacket->setOptions(opts);
+                dataPacket->setChunkLength(B(dataPacketSize));
+                dataPacket->setDepartureTime(simTime());
+
+                switch (routingMetric) {
+    //            case 0:
+    //                dataPacket->setTtl(1);
+    //                break;
+                default:
+                    dataPacket->setTtl(packetTTL);
+                    break;
+                }
+                LoRaPacketsToSend.push_back(*dataPacket);
+            }
+            currDataInt++;
+        }
 }
 
 void LoRaNodeApp::increaseSFIfPossible() {

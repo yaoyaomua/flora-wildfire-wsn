@@ -76,6 +76,7 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         void sendJoinRequest();
         void sendDownMgmtPacket();
         void generateDataPackets();
+        void generateDataPackets2();
         void sanitizeRoutingTable();
         int pickCADSF(int lowestSF);
         int getBestRouteIndexTo(int destination);
