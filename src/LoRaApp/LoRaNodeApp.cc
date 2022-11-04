@@ -539,6 +539,7 @@ void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
 
     // Only proceed to send a data packet if the 'mac' module in 'LoRaNic' is IDLE and the warmup period is due
     LoRaMac *lrmc = (LoRaMac *)getParentModule()->getSubmodule("LoRaNic")->getSubmodule("mac");
+
     if (lrmc->fsm.getState() == IDLE ) {
 
         simtime_t txDuration = 0;
@@ -611,7 +612,6 @@ void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
         else if (dataPacketsDue) {
             nextScheduleTime = nextDataPacketTransmissionTime;
         }
-
         nextScheduleTime = math::maxnan(nextScheduleTime.dbl(), simTime().dbl()+txDuration.dbl());
 
         // Take the duty cycle into account
@@ -1077,8 +1077,11 @@ void LoRaNodeApp::manageReceivedDataPacketToForward(cMessage *msg) {
 
     }
 
-    if (newPacketToForward && !selfPacket->isScheduled()) {
-
+    if (newPacketToForward) {
+    //if (newPacketToForward && !selfPacket->isScheduled()) {
+        if (selfPacket->isScheduled()) {
+            cancelEvent(selfPacket);
+        }
         simtime_t nextScheduleTime = simTime() + 10*simTimeResolution;
 
         if (enforceDutyCycle) {
@@ -1223,6 +1226,7 @@ simtime_t LoRaNodeApp::sendDataPacket() {
             case TIME_ON_AIR_FQUEUE_CAD_MULTI_SF:
             case TIME_ON_AIR_RMP1_CAD_MULTI_SF:
             default:
+                // TODO: Investigate while loop but single transmit
                 while (LoRaPacketsToForward.size() > 0) {
                     addName = "FWD-";
                     fullName += addName;
