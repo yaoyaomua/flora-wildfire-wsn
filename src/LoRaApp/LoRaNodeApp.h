@@ -140,11 +140,11 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         simtime_t timeToNextDataPacketAvg;
         simtime_t timeToNextForwardPacket;
 
-        simtime_t dutyCycleEnd;
-
         simtime_t nextRoutingPacketTransmissionTime;
         simtime_t nextDataPacketTransmissionTime;
         simtime_t nextForwardPacketTransmissionTime;
+        simtime_t minNextPacketTransmissionTime;
+        simtime_t nextScheduleTime;
 
         bool dataPacketsDue;
         bool routingPacketsDue;

@@ -49,7 +49,6 @@ double LoRaLogNormalShadowing::computePathLoss(mps propagationSpeed, Hz frequenc
     // parameters taken from paper "Do LoRa Low-Power Wide-Area Networks Scale?"
     double PL_d0_db = 127.41;
     double PL_db = PL_d0_db + 10 * gamma * log10(unit(distance / d0).get()) + normal(0.0, sigma);
-    EV_INFO << "DISTANCE: " << distance << "PATH LOSS: " << math::dB2fraction(-PL_db) << endl;
     return math::dB2fraction(-PL_db);
 }
 

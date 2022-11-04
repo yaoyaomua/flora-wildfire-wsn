@@ -383,8 +383,6 @@ void LoRaNodeApp::initialize(int stage) {
                 EV << "Self packet triggered by due routing packet before due data packet" << endl;
             }
         }
-
-        dutyCycleEnd = simTime();
     }
 }
 
@@ -543,16 +541,15 @@ void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
     if (lrmc->fsm.getState() == IDLE ) {
 
         simtime_t txDuration = 0;
-        simtime_t nextScheduleTime = 0;
         bool sendRouting = false;
         bool sendData = false;
 
         // Check if there are routing packets to send
-        if ( routingPacketsDue && simTime() >= nextRoutingPacketTransmissionTime ) {
+        if (routingPacketsDue && simTime() >= nextRoutingPacketTransmissionTime) {
             sendRouting = true;
         }
         // Check if there are data packets to send or forward, and if it is time to send them
-        if ( (LoRaPacketsToSend.size() > 0 || LoRaPacketsToForward.size() > 0 ) && simTime() >= nextDataPacketTransmissionTime ) {
+        if ((LoRaPacketsToSend.size() > 0 || LoRaPacketsToForward.size() > 0 ) && simTime() >= nextDataPacketTransmissionTime) {
             sendData = true;
         }
 
@@ -561,8 +558,7 @@ void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
             // Either send a routing packet...
             if (bernoulli(routingPacketPriority)) {
                 sendData = false;
-            }
-            else {
+            } else {
                 sendRouting = false;
             }
         }
@@ -570,57 +566,35 @@ void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
         // Send routing packet
         if (sendRouting) {
             txDuration = sendRoutingPacket();
-            if (enforceDutyCycle) {
-                // Update duty cycle end
-                dutyCycleEnd = simTime() + txDuration/dutyCycle;
-                // Update next routing packet transmission time, taking the duty cycle into account
-                nextRoutingPacketTransmissionTime = simTime() + math::maxnan(getTimeToNextRoutingPacket().dbl(), txDuration.dbl()/dutyCycle);
-            }
-            else {
-                // Update next routing packet transmission time
-                nextRoutingPacketTransmissionTime = simTime() + math::maxnan(getTimeToNextRoutingPacket().dbl(), txDuration.dbl());
-            }
+            // Calculate next transmission time after sending
+            minNextPacketTransmissionTime = simTime() + (enforceDutyCycle ? txDuration/dutyCycle : txDuration);
+            nextRoutingPacketTransmissionTime = math::maxnan(simTime().dbl() + getTimeToNextRoutingPacket().dbl(), minNextPacketTransmissionTime.dbl());
         }
-
         // Send or forward data packet
         else if (sendData) {
             txDuration = sendDataPacket();
-            if (enforceDutyCycle) {
-                // Update duty cycle end
-                dutyCycleEnd = simTime() + txDuration/dutyCycle;
-                // Update next data packet transmission time, taking the duty cycle into account
-                nextDataPacketTransmissionTime = simTime() + math::maxnan(getTimeToNextDataPacket().dbl(), txDuration.dbl()/dutyCycle);
-            }
-            else {
-                // Update next routing packet transmission time
-                nextDataPacketTransmissionTime = simTime() + math::maxnan(getTimeToNextDataPacket().dbl(), txDuration.dbl());
-            }
-            if ( LoRaPacketsToSend.size() > 0 || LoRaPacketsToForward.size() > 0 ) {
+            // Calculate next transmission time after sending
+            minNextPacketTransmissionTime = simTime() + (enforceDutyCycle ? txDuration/dutyCycle : txDuration);
+            nextDataPacketTransmissionTime = math::maxnan(simTime().dbl() + getTimeToNextDataPacket().dbl(), minNextPacketTransmissionTime.dbl());
+
+            if (LoRaPacketsToSend.size() > 0 || LoRaPacketsToForward.size() > 0) {
                 dataPacketsDue = true;
-            }
-            else {
+            } else {
                 dataPacketsDue = false;
             }
         }
 
         if (routingPacketsDue && dataPacketsDue) {
-            nextScheduleTime = math::maxnan(simTime().dbl()+txDuration.dbl(), std::min(nextRoutingPacketTransmissionTime.dbl(), nextDataPacketTransmissionTime.dbl()));
-        }
-        else if (routingPacketsDue) {
+            nextScheduleTime = std::min(nextRoutingPacketTransmissionTime.dbl(), nextDataPacketTransmissionTime.dbl());
+        } else if (routingPacketsDue) {
             nextScheduleTime = nextRoutingPacketTransmissionTime;
-        }
-        else if (dataPacketsDue) {
+        } else if (dataPacketsDue) {
             nextScheduleTime = nextDataPacketTransmissionTime;
         }
-        nextScheduleTime = math::maxnan(nextScheduleTime.dbl(), simTime().dbl()+txDuration.dbl());
-
-        // Take the duty cycle into account
-        if (enforceDutyCycle) {
-            nextScheduleTime = math::maxnan(nextScheduleTime.dbl(), dutyCycleEnd.dbl());
-        }
+        nextScheduleTime = math::maxnan(nextScheduleTime.dbl(), minNextPacketTransmissionTime.dbl());
 
         // Last, check the schedule time is in the future, otherwise just add a 1s delay
-        if (! (nextScheduleTime > simTime()) ) {
+        if (!(nextScheduleTime > simTime())) {
             nextScheduleTime = simTime() + 1;
         }
 
@@ -1078,21 +1052,9 @@ void LoRaNodeApp::manageReceivedDataPacketToForward(cMessage *msg) {
     }
 
     if (newPacketToForward) {
-    //if (newPacketToForward && !selfPacket->isScheduled()) {
-        if (selfPacket->isScheduled()) {
-            cancelEvent(selfPacket);
-        }
-        simtime_t nextScheduleTime = simTime() + 10*simTimeResolution;
-
-        if (enforceDutyCycle) {
-            nextScheduleTime = math::maxnan(nextScheduleTime.dbl(), dutyCycleEnd.dbl());
-        }
-
-        if (! (nextScheduleTime > simTime()) ) {
-            nextScheduleTime = simTime() + 1;
-        }
-
-        scheduleAt(nextScheduleTime, selfPacket);
+        // Reschedule the selfPacket as soon as possible (honoring dutyCycle via minNextPacketTransmissionTime)
+        simtime_t nextScheduleTime = math::maxnan(simTime().dbl(), minNextPacketTransmissionTime.dbl()) + 10*simTimeResolution;
+        rescheduleAt(nextScheduleTime, selfPacket);
     }
 }
 
