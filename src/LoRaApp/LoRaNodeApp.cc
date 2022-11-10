@@ -230,11 +230,6 @@ void LoRaNodeApp::initialize(int stage) {
         dataPacketSize = par("dataPacketDefaultSize");
         routingPacketMaxSize = par("routingPacketMaxSize");
 
-        // Data packets timing
-        timeToNextDataPacketMin = par("timeToNextDataPacketMin");
-        timeToNextDataPacketMax = par("timeToNextDataPacketMax");
-        timeToNextDataPacketAvg = par("timeToNextDataPacketAvg");
-
         // Routing packets timing
         timeToNextRoutingPacketMin = par("timeToNextRoutingPacketMin");
         timeToNextRoutingPacketMax = par("timeToNextRoutingPacketMax");
@@ -336,7 +331,9 @@ void LoRaNodeApp::initialize(int stage) {
         if (numberOfDestinationsPerNode == 0 ) {
             numberOfDestinationsPerNode = numberOfNodes-1;
         }
-        generateDataPackets2();
+
+        selfPacketTxMsg = new cMessage("selfPacketTxMsg");
+        selfTaskTimerMsg = new cMessage("selfTaskTimerMsg");
 
         // Routing packets timer
         timeToFirstRoutingPacket = math::maxnan(5.0, (double)par("timeToFirstRoutingPacket"))+getTimeToNextRoutingPacket();
@@ -354,35 +351,15 @@ void LoRaNodeApp::initialize(int stage) {
                 break;
         }
 
-        // Data packets timer
-        timeToFirstDataPacket = math::maxnan(5.0, (double)par("timeToFirstDataPacket"))+getTimeToNextDataPacket();
-        if (LoRaPacketsToSend.size() > 0) {
-                    dataPacketsDue = true;
-                    nextDataPacketTransmissionTime = timeToFirstDataPacket;
-                    EV << "Time to first data packet: " << timeToFirstDataPacket << endl;
+        if (routingPacketsDue) {
+            scheduleAt(simTime() + timeToFirstRoutingPacket, selfPacketTxMsg);
+            EV << "Self Packet Tx Msg triggered by due routing packet" << endl;
         }
 
-        selfPacket = new cMessage("selfPacket");
-
-        if (dataPacketsDue || routingPacketsDue) {
-
-            if (dataPacketsDue && !routingPacketsDue) {
-                scheduleAt(simTime() + timeToFirstDataPacket, selfPacket);
-                EV << "Self packet triggered by due data packet" << endl;
-            }
-            else if (routingPacketsDue && !dataPacketsDue) {
-                scheduleAt(simTime() + timeToFirstRoutingPacket, selfPacket);
-                EV << "Self packet triggered by due routing packet" << endl;
-            }
-            else if (timeToFirstDataPacket < timeToFirstRoutingPacket) {
-                scheduleAt(simTime() + timeToFirstDataPacket, selfPacket);
-                EV << "Self packet triggered by due data packet before due routing packet" << endl;
-            }
-            else {
-                scheduleAt(simTime() + timeToFirstRoutingPacket, selfPacket);
-                EV << "Self packet triggered by due routing packet before due data packet" << endl;
-            }
-        }
+        // Task timer
+        timeToFirstTaskTimerTick = math::maxnan(5.0, (double)par("timeToFirstTaskTimerTick"));
+        timeToNextTaskTimerTick = par("timeToNextTaskTimerTick");
+        scheduleAt(simTime() + timeToFirstTaskTimerTick, selfTaskTimerMsg);
     }
 }
 
@@ -532,14 +509,11 @@ void LoRaNodeApp::handleMessage(cMessage *msg) {
     }
 }
 
-
-void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
-
+void LoRaNodeApp::handlePacketTxSelfMessage(cMessage *msg) {
     // Only proceed to send a data packet if the 'mac' module in 'LoRaNic' is IDLE and the warmup period is due
     LoRaMac *lrmc = (LoRaMac *)getParentModule()->getSubmodule("LoRaNic")->getSubmodule("mac");
 
     if (lrmc->fsm.getState() == IDLE ) {
-
         simtime_t txDuration = 0;
         bool sendRouting = false;
         bool sendData = false;
@@ -575,7 +549,7 @@ void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
             txDuration = sendDataPacket();
             // Calculate next transmission time after sending
             minNextPacketTransmissionTime = simTime() + (enforceDutyCycle ? txDuration/dutyCycle : txDuration);
-            nextDataPacketTransmissionTime = math::maxnan(simTime().dbl() + getTimeToNextDataPacket().dbl(), minNextPacketTransmissionTime.dbl());
+            nextDataPacketTransmissionTime = minNextPacketTransmissionTime;
 
             if (LoRaPacketsToSend.size() > 0 || LoRaPacketsToForward.size() > 0) {
                 dataPacketsDue = true;
@@ -583,6 +557,8 @@ void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
                 dataPacketsDue = false;
             }
         }
+
+        simtime_t nextScheduleTime = 0;
 
         if (routingPacketsDue && dataPacketsDue) {
             nextScheduleTime = std::min(nextRoutingPacketTransmissionTime.dbl(), nextDataPacketTransmissionTime.dbl());
@@ -602,33 +578,49 @@ void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
         // simulation time delta (i.e., a simtime-resolution unit) to avoid
         // timing conflicts in the LoRaMac layer
         if (routingPacketsDue || dataPacketsDue) {
-            scheduleAt(nextScheduleTime + 10*simTimeResolution, selfPacket);
+            scheduleAt(nextScheduleTime + 10*simTimeResolution, selfPacketTxMsg);
         }
 
-        if (!sendPacketsContinuously && routingPacketsDue) {
-
-            bool allNodesDone = true;
-
-            for (int i=0; i<numberOfNodes; i++) {
-                LoRaNodeApp *lrndpp = (LoRaNodeApp *) getParentModule()->getParentModule()->getSubmodule("loRaNodes", i)->getSubmodule("app",0);
-                if ( !(lrndpp->lastDataPacketTransmissionTime > 0 && \
-                     // ToDo: maybe too restrictive? If no packets were received at all
-                     // simulation laster until the very end
-                     //lrndpp->lastDataPacketReceptionTime > 0 &&
-                     lrndpp->lastDataPacketTransmissionTime + stopRoutingAfterDataDone < simTime() && \
-                     lrndpp->lastDataPacketReceptionTime + stopRoutingAfterDataDone < simTime() )) {
-                    allNodesDone = false;
-                    break;
-                }
-
-                if (allNodesDone) {
-                    routingPacketsDue = false;
-                }
-            }
-        }
+//        if (!sendPacketsContinuously && routingPacketsDue) {
+//
+//            bool allNodesDone = true;
+//
+//            for (int i=0; i<numberOfNodes; i++) {
+//                LoRaNodeApp *lrndpp = (LoRaNodeApp *) getParentModule()->getParentModule()->getSubmodule("loRaNodes", i)->getSubmodule("app",0);
+//                if ( !(lrndpp->lastDataPacketTransmissionTime > 0 && \
+//                     // ToDo: maybe too restrictive? If no packets were received at all
+//                     // simulation laster until the very end
+//                     //lrndpp->lastDataPacketReceptionTime > 0 &&
+//                     lrndpp->lastDataPacketTransmissionTime + stopRoutingAfterDataDone < simTime() && \
+//                     lrndpp->lastDataPacketReceptionTime + stopRoutingAfterDataDone < simTime() )) {
+//                    allNodesDone = false;
+//                    break;
+//                }
+//
+//                if (allNodesDone) {
+//                    routingPacketsDue = false;
+//                }
+//            }
+//        }
     }
     else {
-        scheduleAt(simTime() + 10*simTimeResolution, selfPacket);
+        scheduleAt(simTime() + 10*simTimeResolution, selfPacketTxMsg);
+    }
+}
+
+void LoRaNodeApp::handleTaskTimerSelfMessage(cMessage *msg) {
+    // EV_INFO << "Periodic task timer!" << endl;
+    // TODO: Add fire detection task code
+    scheduleAt(simTime() + timeToNextTaskTimerTick, selfTaskTimerMsg);
+}
+
+void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
+    if (msg == selfPacketTxMsg) {
+        handlePacketTxSelfMessage(msg);
+    } else if (msg == selfTaskTimerMsg) {
+        handleTaskTimerSelfMessage(msg);
+    } else {
+        throw cRuntimeError("Unknown self message");
     }
 }
 
@@ -1052,9 +1044,9 @@ void LoRaNodeApp::manageReceivedDataPacketToForward(cMessage *msg) {
     }
 
     if (newPacketToForward) {
-        // Reschedule the selfPacket as soon as possible (honoring dutyCycle via minNextPacketTransmissionTime)
+        // Reschedule the selfPacketTxMsg as soon as possible (honoring dutyCycle via minNextPacketTransmissionTime)
         simtime_t nextScheduleTime = math::maxnan(simTime().dbl(), minNextPacketTransmissionTime.dbl()) + 10*simTimeResolution;
-        rescheduleAt(nextScheduleTime, selfPacket);
+        rescheduleAt(nextScheduleTime, selfPacketTxMsg);
     }
 }
 
@@ -1101,7 +1093,7 @@ void LoRaNodeApp::manageReceivedAckPacketForMe(cMessage *msg) {
     auto pkt = check_and_cast<Packet *>(msg);
     const auto & packet = pkt->peekAtFront<LoRaAppPacket>();
 
-    // Optional: do something with the packet
+    // TODO: Log fire alarm is received (this should be the "next-to-gateway" node)
 }
 
 bool LoRaNodeApp::handleOperationStage(LifecycleOperation *operation,
@@ -1307,11 +1299,6 @@ simtime_t LoRaNodeApp::sendDataPacket() {
         emit(LoRa_AppPacketSent, getSF());
     }
 
-    // Generate more packets if needed
-    if (sendPacketsContinuously && LoRaPacketsToSend.size() == 0) {
-        generateDataPackets2();
-    }
-
     return txDuration;
 }
 
@@ -1454,98 +1441,98 @@ simtime_t LoRaNodeApp::sendRoutingPacket() {
     return txDuration;
 }
 
-void LoRaNodeApp::generateDataPackets() {
-
-    if (!onlyNode0SendsPackets || nodeId == 0) {
-        std::vector<int> destinations = { };
-
-        if (numberOfDestinationsPerNode == 0 )
-            numberOfDestinationsPerNode = numberOfNodes-1;
-
-        while (destinations.size() < numberOfDestinationsPerNode
-                && numberOfNodes - 1 - destinations.size() > 0) {
-
-            int destination = intuniform(0, numberOfNodes - 1);
-
-            if (destination != nodeId) {
-                bool newDestination = true;
-
-                for (int i = 0; i < destinations.size(); i++) {
-                    if (destination == destinations[i]) {
-                        newDestination = false;
-                        break;
-                    }
-                }
-
-                if (newDestination) {
-                    destinations.push_back(destination);
-                }
-            }
-        }
-
-        for (int k = 0; k < numberOfPacketsPerDestination; k++) {
-            for (int j = 0; j < destinations.size(); j++) {
-                auto dataPacket = makeShared<LoRaAppPacket>();
-
-                dataPacket->setMsgType(DATA);
-                dataPacket->setDataInt(currDataInt+k);
-                dataPacket->setSource(nodeId);
-                dataPacket->setVia(nodeId);
-                dataPacket->setDestination(destinations[j]);
-                LoRaOptions opts = dataPacket->getOptions();
-                opts.setAppACKReq(requestACKfromApp);
-                dataPacket->setOptions(opts);
-                dataPacket->setChunkLength(B(dataPacketSize));
-                dataPacket->setDepartureTime(simTime());
-
-                switch (routingMetric) {
-    //            case 0:
-    //                dataPacket->setTtl(1);
-    //                break;
-                default:
-                    dataPacket->setTtl(packetTTL);
-                    break;
-                }
-
-                LoRaPacketsToSend.push_back(*dataPacket);
-            }
-            currDataInt++;
-        }
-    }
-}
-
-void LoRaNodeApp::generateDataPackets2() {
-
-    if (nodeId == 0) {
-        int destination = 2;
-
-        for (int k = 0; k < numberOfPacketsPerDestination; k++) {
-                auto dataPacket = makeShared<LoRaAppPacket>();
-
-                dataPacket->setMsgType(DATA);
-                dataPacket->setDataInt(currDataInt+k);
-                dataPacket->setSource(nodeId);
-                dataPacket->setVia(nodeId);
-                dataPacket->setDestination(destination);
-                LoRaOptions opts = dataPacket->getOptions();
-                opts.setAppACKReq(requestACKfromApp);
-                dataPacket->setOptions(opts);
-                dataPacket->setChunkLength(B(dataPacketSize));
-                dataPacket->setDepartureTime(simTime());
-
-                switch (routingMetric) {
-    //            case 0:
-    //                dataPacket->setTtl(1);
-    //                break;
-                default:
-                    dataPacket->setTtl(packetTTL);
-                    break;
-                }
-                LoRaPacketsToSend.push_back(*dataPacket);
-            }
-            currDataInt++;
-        }
-}
+//void LoRaNodeApp::generateDataPackets() {
+//
+//    if (!onlyNode0SendsPackets || nodeId == 0) {
+//        std::vector<int> destinations = { };
+//
+//        if (numberOfDestinationsPerNode == 0 )
+//            numberOfDestinationsPerNode = numberOfNodes-1;
+//
+//        while (destinations.size() < numberOfDestinationsPerNode
+//                && numberOfNodes - 1 - destinations.size() > 0) {
+//
+//            int destination = intuniform(0, numberOfNodes - 1);
+//
+//            if (destination != nodeId) {
+//                bool newDestination = true;
+//
+//                for (int i = 0; i < destinations.size(); i++) {
+//                    if (destination == destinations[i]) {
+//                        newDestination = false;
+//                        break;
+//                    }
+//                }
+//
+//                if (newDestination) {
+//                    destinations.push_back(destination);
+//                }
+//            }
+//        }
+//
+//        for (int k = 0; k < numberOfPacketsPerDestination; k++) {
+//            for (int j = 0; j < destinations.size(); j++) {
+//                auto dataPacket = makeShared<LoRaAppPacket>();
+//
+//                dataPacket->setMsgType(DATA);
+//                dataPacket->setDataInt(currDataInt+k);
+//                dataPacket->setSource(nodeId);
+//                dataPacket->setVia(nodeId);
+//                dataPacket->setDestination(destinations[j]);
+//                LoRaOptions opts = dataPacket->getOptions();
+//                opts.setAppACKReq(requestACKfromApp);
+//                dataPacket->setOptions(opts);
+//                dataPacket->setChunkLength(B(dataPacketSize));
+//                dataPacket->setDepartureTime(simTime());
+//
+//                switch (routingMetric) {
+//    //            case 0:
+//    //                dataPacket->setTtl(1);
+//    //                break;
+//                default:
+//                    dataPacket->setTtl(packetTTL);
+//                    break;
+//                }
+//
+//                LoRaPacketsToSend.push_back(*dataPacket);
+//            }
+//            currDataInt++;
+//        }
+//    }
+//}
+//
+//void LoRaNodeApp::generateDataPackets2() {
+//
+//    if (nodeId == 0) {
+//        int destination = 2;
+//
+//        for (int k = 0; k < numberOfPacketsPerDestination; k++) {
+//                auto dataPacket = makeShared<LoRaAppPacket>();
+//
+//                dataPacket->setMsgType(DATA);
+//                dataPacket->setDataInt(currDataInt+k);
+//                dataPacket->setSource(nodeId);
+//                dataPacket->setVia(nodeId);
+//                dataPacket->setDestination(destination);
+//                LoRaOptions opts = dataPacket->getOptions();
+//                opts.setAppACKReq(requestACKfromApp);
+//                dataPacket->setOptions(opts);
+//                dataPacket->setChunkLength(B(dataPacketSize));
+//                dataPacket->setDepartureTime(simTime());
+//
+//                switch (routingMetric) {
+//    //            case 0:
+//    //                dataPacket->setTtl(1);
+//    //                break;
+//                default:
+//                    dataPacket->setTtl(packetTTL);
+//                    break;
+//                }
+//                LoRaPacketsToSend.push_back(*dataPacket);
+//            }
+//            currDataInt++;
+//        }
+//}
 
 void LoRaNodeApp::increaseSFIfPossible() {
     if (getSF() < 12) {
@@ -1902,18 +1889,6 @@ simtime_t LoRaNodeApp::getTimeToNextRoutingPacket() {
     else if ( strcmp(par("timeToNextRoutingPacketDist").stringValue(), "exponential") == 0) {
         simtime_t routingTime = exponential(timeToNextRoutingPacketAvg);
         return routingTime;
-    }
-    return simTime();
-}
-
-simtime_t LoRaNodeApp::getTimeToNextDataPacket() {
-    if ( strcmp(par("timeToNextDataPacketDist").stringValue(), "uniform") == 0) {
-        simtime_t DataTime = uniform(timeToNextDataPacketMin, timeToNextDataPacketMax);
-        return DataTime;
-    }
-    else if ( strcmp(par("timeToNextDataPacketDist").stringValue(), "exponential") == 0) {
-        simtime_t DataTime = exponential(timeToNextDataPacketAvg);
-        return DataTime;
     }
     return simTime();
 }
