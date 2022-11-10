@@ -58,9 +58,10 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         virtual bool isDataPacketForMeUnique(const LoRaAppPacket & packet);
 
         void handleMessageFromLowerLayer(cMessage *msg);
+        void handlePacketTxSelfMessage(cMessage *msg);
+        void handleTaskTimerSelfMessage(cMessage *msg);
         void handleSelfMessage(cMessage *msg);
 
-        simtime_t getTimeToNextDataPacket();
         simtime_t getTimeToNextRoutingPacket();
 
         simtime_t sendRoutingPacket();
@@ -75,7 +76,6 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         std::pair<double,double> generateUniformCircleCoordinates(double radius, double gatewayX, double gatewayY);
         void sendJoinRequest();
         void sendDownMgmtPacket();
-        void generateDataPackets();
         void sanitizeRoutingTable();
         int pickCADSF(int lowestSF);
         int getBestRouteIndexTo(int destination);
@@ -132,18 +132,14 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         simtime_t timeToNextRoutingPacketMin;
         simtime_t timeToNextRoutingPacketMax;
         simtime_t timeToNextRoutingPacketAvg;
-        simtime_t timeToFirstDataPacket;
-        std::string timeToNextDataPacketDist;
-        simtime_t timeToNextDataPacketMin;
-        simtime_t timeToNextDataPacketMax;
-        simtime_t timeToNextDataPacketAvg;
-        simtime_t timeToNextForwardPacket;
 
-        simtime_t dutyCycleEnd;
+        simtime_t timeToFirstTaskTimerTick;
+        simtime_t timeToNextTaskTimerTick;
 
         simtime_t nextRoutingPacketTransmissionTime;
         simtime_t nextDataPacketTransmissionTime;
         simtime_t nextForwardPacketTransmissionTime;
+        simtime_t minNextPacketTransmissionTime;
 
         bool dataPacketsDue;
         bool routingPacketsDue;
@@ -163,11 +159,10 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         simtime_t firstDataPacketReceptionTime;
         simtime_t lastDataPacketReceptionTime;
 
-
         simtime_t simTimeResolution;
 
-        cMessage *configureLoRaParameters;
-        cMessage *selfPacket;
+        cMessage *selfPacketTxMsg;
+        cMessage *selfTaskTimerMsg;
 
         //history of sent packets;
         cOutVector txSfVector;
