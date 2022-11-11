@@ -19,7 +19,6 @@ import flora.LoRaPhy.LoRaTransmitter;
 import flora.LoRaPhy.LoRaReceiver;
 //import inet.physicallayer.wireless.common.base.packetlevel.FlatRadioBase;
 import inet.physicallayer.wireless.common.base.packetlevel.NarrowbandRadioBase;
-import inet.power.storage.IdealEpEnergyStorage;
 //module LoRaRadio extends FlatRadioBase
 module LoRaRadio extends NarrowbandRadioBase
 {
@@ -89,8 +88,4 @@ module LoRaRadio extends NarrowbandRadioBase
         bool iAmGateway = default(false);
         @class(LoRaRadio); //originally it was @class(Radio);
         @display("bgb=215,413");
-    submodules:
-        IdealEpEnergyStorage: IdealEpEnergyStorage {
-            @display("p=178,296");
-        }
 }

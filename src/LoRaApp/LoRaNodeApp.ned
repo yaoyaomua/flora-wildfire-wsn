@@ -16,7 +16,7 @@
 package flora.LoRaApp;
 
 import inet.applications.contract.IApp;
-
+import inet.networklayer.common.NetworkInterface;
 //
 // TODO auto-generated module
 //
@@ -32,9 +32,9 @@ simple LoRaNodeApp like IApp
 
         volatile double timeToFirstRoutingPacket @unit(s) = default(300s);
         string timeToNextRoutingPacketDist = default("uniform");
-		volatile double timeToNextRoutingPacketMin @unit(s) = default(0s);
-		volatile double timeToNextRoutingPacketMax @unit(s) = default(600s);
-		volatile double timeToNextRoutingPacketAvg @unit(s) = default(300s);
+        volatile double timeToNextRoutingPacketMin @unit(s) = default(0s);
+        volatile double timeToNextRoutingPacketMax @unit(s) = default(600s);
+        volatile double timeToNextRoutingPacketAvg @unit(s) = default(300s);
 
         double initialLoRaTP @unit(dBm) = default(14dBm);
         double initialLoRaCF @unit(Hz) = default(868MHz);
@@ -74,6 +74,14 @@ simple LoRaNodeApp like IApp
         volatile double stopRoutingAfterDataDone @unit(s) = default(3600s);
         int forwardedPacketVectorSize = default(10);
         int packetsToForwardMaxVectorSize = default(0);
+
+        string initialAppMode @enum("sleep","run") = default("sleep");
+        string switchingTimes = default("ms 0 0 0 0"); // time parameters to switch between app modes
+
+        @signal[appModeChanged](type=long);
+        @statistic[appMode](title="App mode"; source=appModeChanged; record=count,vector; interpolationmode=sample-hold);
+
+        @display("bgb=314,348");
     gates:
         input socketIn @labels(LoRaAppPacket/up);
         output socketOut @labels(LoRaAppPacket/down);
