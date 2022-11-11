@@ -159,6 +159,16 @@ void LoRaNodeApp::initialize(int stage) {
         firstDataPacketReceptionTime = 0;
         lastDataPacketReceptionTime = 0;
 
+        // TODO: Parametrize initial temperature, humidity, and thresholds
+        // TODO: Parametrize force fire logic: nodeId, time to start
+        averageTemp = iniTemp = 20.0;
+        tempSensor = new TempSensorNode(iniTemp);
+        tempFireThreshold = 20.0;
+
+        averageHumidity = iniHumidity = 20.0;
+        humiditySensor = new HumiditySensorNode(iniHumidity);
+        humidityFireThreshold = 20.0;
+
         dataPacketsDue = false;
         routingPacketsDue = false;
 
@@ -492,6 +502,8 @@ void LoRaNodeApp::cleanTeardown()
         DataPacketsForMe.erase(lbptr);
     }
     cancelEvent(selfTaskTimerMsg);
+    delete tempSensor;
+    delete humiditySensor;
 }
 
 void LoRaNodeApp::finish() {
@@ -666,28 +678,6 @@ void LoRaNodeApp::handlePacketTxSelfMessage(cMessage *msg) {
         if (routingPacketsDue || dataPacketsDue) {
             scheduleAt(nextScheduleTime + 10*simTimeResolution, selfPacketTxMsg);
         }
-
-//        if (!sendPacketsContinuously && routingPacketsDue) {
-//
-//            bool allNodesDone = true;
-//
-//            for (int i=0; i<numberOfNodes; i++) {
-//                LoRaNodeApp *lrndpp = (LoRaNodeApp *) getParentModule()->getParentModule()->getSubmodule("loRaNodes", i)->getSubmodule("app",0);
-//                if ( !(lrndpp->lastDataPacketTransmissionTime > 0 && \
-//                     // ToDo: maybe too restrictive? If no packets were received at all
-//                     // simulation laster until the very end
-//                     //lrndpp->lastDataPacketReceptionTime > 0 &&
-//                     lrndpp->lastDataPacketTransmissionTime + stopRoutingAfterDataDone < simTime() && \
-//                     lrndpp->lastDataPacketReceptionTime + stopRoutingAfterDataDone < simTime() )) {
-//                    allNodesDone = false;
-//                    break;
-//                }
-//
-//                if (allNodesDone) {
-//                    routingPacketsDue = false;
-//                }
-//            }
-//        }
     }
     else {
         scheduleAt(simTime() + 10*simTimeResolution, selfPacketTxMsg);
@@ -696,7 +686,30 @@ void LoRaNodeApp::handlePacketTxSelfMessage(cMessage *msg) {
 
 void LoRaNodeApp::handleTaskTimerSelfMessage(cMessage *msg) {
     setAppMode(APP_MODE_RUN);
-    // TODO: Add fire detection task code
+
+    double currentTemp = tempSensor->getData();
+    double currentHumidity = humiditySensor->getData();
+    // TODO: Parametrize current weight
+    double cw = 0.25;
+
+    // TODO: decide on criteria for starting a fire, either random chance or time
+    if ((nodeId == 1) && (rand() % 1000 / 1000.0 > 0.05)) {
+        currentTemp = tempSensor->forceFire();
+        currentHumidity = tempSensor->forceFire();
+    }
+
+    averageTemp = (1-cw) * averageTemp + cw * currentTemp;
+    averageHumidity = (1-cw) * averageHumidity + cw * currentHumidity;
+
+    if (averageTemp > tempFireThreshold &&
+        averageHumidity > humidityFireThreshold) {
+        EV_INFO << "Triggering fire alarm!" << endl;
+        generateFireAlarmPacket();
+        simtime_t nextScheduleTime = math::maxnan(simTime().dbl(), minNextPacketTransmissionTime.dbl()) + 10*simTimeResolution;
+        rescheduleAt(nextScheduleTime, selfPacketTxMsg);
+    }
+
+    // Go to sleep and schedule next task timer tick
     setAppMode(APP_MODE_SLEEP);
     scheduleAt(simTime() + timeToNextTaskTimerTick, selfTaskTimerMsg);
 }
@@ -716,6 +729,27 @@ void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
     } else {
         throw cRuntimeError("Unknown self message");
     }
+}
+
+void LoRaNodeApp::generateFireAlarmPacket() {
+    auto dataPacket = makeShared<LoRaAppPacket>();
+
+    dataPacket->setMsgType(DATA);
+    // dataPacket->setDataInt(currDataInt+k);
+    dataPacket->setDataInt(averageTemp);
+    dataPacket->setSource(nodeId);
+    dataPacket->setVia(nodeId);
+
+    // TODO: Parametrize with gateway ID
+    dataPacket->setDestination(0);
+    LoRaOptions opts = dataPacket->getOptions();
+    opts.setAppACKReq(requestACKfromApp);
+    dataPacket->setOptions(opts);
+    dataPacket->setChunkLength(B(dataPacketSize));
+    dataPacket->setDepartureTime(simTime());
+    dataPacket->setTtl(packetTTL);
+
+    LoRaPacketsToSend.push_back(*dataPacket);
 }
 
 void LoRaNodeApp::handleMessageFromLowerLayer(cMessage *msg) {

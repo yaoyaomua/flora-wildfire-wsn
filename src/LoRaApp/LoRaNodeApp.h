@@ -29,6 +29,9 @@
 #include "LoRa/LoRaMacControlInfo_m.h"
 #include "LoRa/LoRaRadio.h"
 
+#include "Sensor/TempSensorNode.h"
+#include "Sensor/HumiditySensorNode.h"
+
 using namespace omnetpp;
 using namespace inet;
 
@@ -78,6 +81,7 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
 
         void handleMessageFromLowerLayer(cMessage *msg);
         void handleSelfMessage(cMessage *msg);
+        void generateFireAlarmPacket();
 
         simtime_t getTimeToNextRoutingPacket();
 
@@ -251,6 +255,15 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
 
         //Forward packets buffer max vector size
         int packetsToForwardMaxVectorSize;
+
+        // Sensors and fire detection
+        double iniTemp, averageTemp;
+        TempSensorNode *tempSensor;
+        double tempFireThreshold;
+
+        double iniHumidity, averageHumidity;
+        HumiditySensorNode *humiditySensor;
+        double humidityFireThreshold;
 
         // Routing tables
         class singleMetricRoute {
