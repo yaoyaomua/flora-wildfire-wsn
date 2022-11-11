@@ -77,8 +77,6 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         virtual bool isDataPacketForMeUnique(const LoRaAppPacket & packet);
 
         void handleMessageFromLowerLayer(cMessage *msg);
-        void handlePacketTxSelfMessage(cMessage *msg);
-        void handleTaskTimerSelfMessage(cMessage *msg);
         void handleSelfMessage(cMessage *msg);
 
         simtime_t getTimeToNextRoutingPacket();
@@ -315,15 +313,16 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         static cEnum *appModeEnum;
 
         simtime_t switchingTimes[APP_MODE_SWITCHING][APP_MODE_SWITCHING];
-        AppMode appMode = APP_MODE_SLEEP;
-        AppMode nextAppMode = APP_MODE_RUN;
-        AppMode previousAppMode = APP_MODE_SLEEP;
-        cMessage *switchTimer = nullptr;
+        AppMode appMode, nextAppMode, previousAppMode;
+        cMessage *selfAppModeSwitchTimerMsg;
 
     private:
         void parseAppModeSwitchingTimes();
         void startAppModeSwitch(AppMode newAppMode, simtime_t switchingTime);
         void completeAppModeSwitch(AppMode newAppMode);
+        void handlePacketTxSelfMessage(cMessage *msg);
+        void handleTaskTimerSelfMessage(cMessage *msg);
+        void handleAppModeSwitchTimerSelfMessage(cMessage *msg);
 };
 
 }

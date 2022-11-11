@@ -11,6 +11,7 @@
 #include "inet/power/contract/IEpEnergyConsumer.h"
 #include "inet/power/contract/IEpEnergySource.h"
 
+#include "LoRaApp/LoRaNodeApp.h"
 
 using namespace inet;
 
@@ -18,33 +19,32 @@ namespace flora {
 
 using namespace inet::power;
 
-class LoRaAppEnergyConsumer: public cSimpleModule, public IEpEnergyConsumer
+class LoRaAppEnergyConsumer: public cSimpleModule, public IEpEnergyConsumer, public cListener
 {
 public:
-    virtual ~LoRaAppEnergyConsumer();
     virtual void initialize(int stage) override;
     void finish() override;
-    virtual void handleMessage(cMessage *message) override;
-
-    virtual void updatePowerConsumption();
-    virtual void scheduleIntervalTimer();
-
-    virtual IEnergySource *getEnergySource() const override { return energySource; }
-    virtual W getPowerConsumption() const override { return powerConsumption; }
+    virtual W getPowerConsumption() const override;
+    virtual void receiveSignal(cComponent *source, simsignal_t signal, intval_t value, cObject *details) override;
+    virtual power::IEnergySource *getEnergySource() const override { return energySourceP; }
 
 protected:
+    virtual int numInitStages() const override { return NUM_INIT_STAGES; }
+
     int energyConsumerId;
     double totalEnergyConsumed;
     J energyBalance = J(NaN);
     simtime_t lastEnergyBalanceUpdate = -1;
-    W lastPowerConsumption = W(0);
 
-    // parameters
-    IEpEnergySource *energySource = nullptr;
-    cMessage *timer = nullptr;
+    W lastPowerConsumption = W(0);
+    W runAppPowerConsumption;
+    W sleepAppPowerConsumption;
+
+    // environment
+    opp_component_ptr<LoRaNodeApp> app;
+    opp_component_ptr<power::IEpEnergySource> energySourceP;
 
     // state
-    bool isSleeping = false;
     W powerConsumption = W(NaN);
 };
 }

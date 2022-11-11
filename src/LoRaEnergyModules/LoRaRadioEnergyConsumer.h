@@ -32,6 +32,7 @@ public:
     virtual W getPowerConsumption() const override;
     bool readConfigurationFile();
     virtual void receiveSignal(cComponent *source, simsignal_t signal, intval_t value, cObject *details) override;
+    virtual power::IEnergySource *getEnergySource() const override { return energySourceP; }
 
 protected:
     int energyConsumerId;
@@ -49,6 +50,8 @@ protected:
     // map between txPower (dBm) and supply current (mA)
     std::map<double, double> transmitterTransmittingSupplyCurrent;
 
+    // environment
+    opp_component_ptr<power::IEpEnergySource> energySourceP;
 
 };
 

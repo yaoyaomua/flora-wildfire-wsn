@@ -56,13 +56,15 @@ void LoRaRadioEnergyConsumer::initialize(int stage)
         //radioModule->subscribe(IdealEpEnergyStorage::residualEnergyCapacityChangedSignal, this);
         radio = check_and_cast<IRadio *>(radioModule);
 
-        energySource.reference(this, "energySourceModule", true);
+        //energySource.reference(this, "energySourceModule", true);
+        // Hack to get path for energy source in LoRa node (-> radio -> nic -> node ->)
+        energySourceP = check_and_cast<IEpEnergySource *>(getParentModule()->getParentModule()->getParentModule()->getSubmodule(par("energySourceModule")));
 
         totalEnergyConsumed = 0;
         energyBalance = J(0);
     }
     else if (stage == INITSTAGE_POWER)
-        energySource->addEnergyConsumer(this);
+        energySourceP->addEnergyConsumer(this);
 }
 
 void LoRaRadioEnergyConsumer::finish()

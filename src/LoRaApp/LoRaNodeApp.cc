@@ -60,7 +60,7 @@ void LoRaNodeApp::initialize(int stage) {
         std::pair<double, double> coordsValues = std::make_pair(-1, -1);
         cModule *host = getContainingNode(this);
 
-        switchTimer = new cMessage("switchTimer");
+        selfAppModeSwitchTimerMsg = new cMessage("selfAppModeSwitchTimerMsg");
         WATCH(appMode);
 
         // Generate random location for nodes if circle deployment type
@@ -402,24 +402,6 @@ void LoRaNodeApp::initializeAppMode() {
         throw cRuntimeError("Unknown initialAppMode");
 }
 
-void LoRaNodeApp::setAppMode(AppMode newAppMode)
-{
-    Enter_Method("setAppMode");
-    if (newAppMode < APP_MODE_SLEEP || newAppMode > APP_MODE_SWITCHING)
-        throw cRuntimeError("Unknown app mode: %d", newAppMode);
-    else if (newAppMode == APP_MODE_SWITCHING)
-        throw cRuntimeError("Cannot switch manually to APP_MODE_SWITCHING");
-    else if (appMode == APP_MODE_SWITCHING || switchTimer->isScheduled())
-        throw cRuntimeError("Cannot switch to a new APP mode while another switch is in progress");
-    else if (newAppMode != appMode && newAppMode != nextAppMode) {
-        simtime_t switchingTime = switchingTimes[appMode][newAppMode];
-        if (switchingTime != 0)
-            startAppModeSwitch(newAppMode, switchingTime);
-        else
-            completeAppModeSwitch(newAppMode);
-    }
-}
-
 void LoRaNodeApp::parseAppModeSwitchingTimes()
 {
     const char *times = par("switchingTimes");
@@ -451,23 +433,37 @@ void LoRaNodeApp::parseAppModeSwitchingTimes()
         throw cRuntimeError("Check your switchingTimes parameter! Some parameters may be missed");
 }
 
+void LoRaNodeApp::setAppMode(AppMode newAppMode)
+{
+    Enter_Method("setAppMode");
+    if (newAppMode < APP_MODE_SLEEP || newAppMode > APP_MODE_SWITCHING)
+        throw cRuntimeError("Unknown app mode: %d", newAppMode);
+    else if (newAppMode == APP_MODE_SWITCHING)
+        throw cRuntimeError("Cannot switch manually to APP_MODE_SWITCHING");
+    else if (appMode == APP_MODE_SWITCHING || selfAppModeSwitchTimerMsg->isScheduled())
+        throw cRuntimeError("Cannot switch to a new APP mode while another switch is in progress");
+    else if (newAppMode != appMode && newAppMode != nextAppMode) {
+        simtime_t switchingTime = switchingTimes[appMode][newAppMode];
+        if (switchingTime != 0)
+            startAppModeSwitch(newAppMode, switchingTime);
+        else
+            completeAppModeSwitch(newAppMode);
+    }
+}
+
 void LoRaNodeApp::startAppModeSwitch(AppMode newAppMode, simtime_t switchingTime)
 {
-    //EV_DETAIL << "Starting to change App mode from \x1b[1m" << getAppModeName(AppMode) << "\x1b[0m to \x1b[1m" << getAppModeName(newAppMode) << "\x1b[0m." << endl;
+    EV_DETAIL << "Starting to change App mode from \x1b[1m" << appMode << "\x1b[0m to \x1b[1m" << newAppMode << "\x1b[0m." << endl;
     previousAppMode = appMode;
-             appMode = APP_MODE_SWITCHING;
-             nextAppMode = newAppMode;
-             emit(appModeChangedSignal, appMode);
-             scheduleAfter(switchingTime, switchTimer);
+    appMode = APP_MODE_SWITCHING;
+    nextAppMode = newAppMode;
+    emit(appModeChangedSignal, appMode);
+    scheduleAfter(switchingTime, selfAppModeSwitchTimerMsg);
 }
 
 void LoRaNodeApp::completeAppModeSwitch(AppMode newAppMode)
 {
-    // EV_INFO << "App mode changed from \x1b[1m" << getAppModeName(previousAppMode) << "\x1b[0m to \x1b[1m" << getAppModeName(newAppMode) << "\x1b[0m." << endl;
-     // if (!isReceiverMode(newAppMode) && receptionTimer != nullptr)
-         // abortReception(receptionTimer);
-      //if (!isTransmitterMode(newAppMode) && transmissionTimer->isScheduled())
-      //    abortTransmission();
+    EV_INFO << "App mode changed from \x1b[1m" << previousAppMode << "\x1b[0m to \x1b[1m" << newAppMode << "\x1b[0m." << endl;
     appMode = previousAppMode = nextAppMode = newAppMode;
     emit(appModeChangedSignal, newAppMode);
 }
@@ -594,15 +590,6 @@ void LoRaNodeApp::finish() {
     dataPacketsForMeUniqueLatency.recordAs("dataPacketsForMeUniqueLatency");
 }
 
-void LoRaNodeApp::handleMessage(cMessage *msg) {
-
-    if (msg->isSelfMessage()) {
-        handleSelfMessage(msg);
-    } else {
-        handleMessageFromLowerLayer(msg);
-    }
-}
-
 void LoRaNodeApp::handlePacketTxSelfMessage(cMessage *msg) {
     // Only proceed to send a data packet if the 'mac' module in 'LoRaNic' is IDLE and the warmup period is due
     LoRaMac *lrmc = (LoRaMac *)getParentModule()->getSubmodule("LoRaNic")->getSubmodule("mac");
@@ -703,18 +690,35 @@ void LoRaNodeApp::handlePacketTxSelfMessage(cMessage *msg) {
 }
 
 void LoRaNodeApp::handleTaskTimerSelfMessage(cMessage *msg) {
-    // EV_INFO << "Periodic task timer!" << endl;
+    setAppMode(APP_MODE_RUN);
     // TODO: Add fire detection task code
+    setAppMode(APP_MODE_SLEEP);
     scheduleAt(simTime() + timeToNextTaskTimerTick, selfTaskTimerMsg);
 }
 
+void LoRaNodeApp::handleAppModeSwitchTimerSelfMessage(cMessage *msg) {
+    completeAppModeSwitch(nextAppMode);
+}
+
 void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
+
     if (msg == selfPacketTxMsg) {
         handlePacketTxSelfMessage(msg);
     } else if (msg == selfTaskTimerMsg) {
         handleTaskTimerSelfMessage(msg);
+    } else if (msg == selfAppModeSwitchTimerMsg) {
+        handleAppModeSwitchTimerSelfMessage(msg);
     } else {
         throw cRuntimeError("Unknown self message");
+    }
+}
+
+void LoRaNodeApp::handleMessage(cMessage *msg) {
+
+    if (msg->isSelfMessage()) {
+        handleSelfMessage(msg);
+    } else {
+        handleMessageFromLowerLayer(msg);
     }
 }
 
