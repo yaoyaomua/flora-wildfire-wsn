@@ -97,9 +97,10 @@ network LoRaMesh
         int networkSizeX = default(1400);
         int networkSizeY = default(2500);
         //@display("bgb=1400,2500;bgi=background/coquimbo-02;bgl=2");
-        @display("bgb=2500,2500;bgl=2");
+        @display("bgb=4500,2500;bgi=background/forest_map,s;bgl=2");
     submodules:
         loRaNodes[numberOfNodes]: LoRaNode {
+            //@display("p=83.664,233.856;is=n");
             @display("p=83.664,233.856;is=n");
         }
         loRaGW[numberOfGateways]: LoRaGW {

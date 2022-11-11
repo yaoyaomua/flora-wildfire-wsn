@@ -60,9 +60,6 @@ void LoRaNodeApp::initialize(int stage) {
         std::pair<double, double> coordsValues = std::make_pair(-1, -1);
         cModule *host = getContainingNode(this);
 
-        selfAppModeSwitchTimerMsg = new cMessage("selfAppModeSwitchTimerMsg");
-        WATCH(appMode);
-
         // Generate random location for nodes if circle deployment type
         if (strcmp(host->par("deploymentType").stringValue(), "circle") == 0) {
             coordsValues = generateUniformCircleCoordinates(
@@ -340,6 +337,7 @@ void LoRaNodeApp::initialize(int stage) {
             WATCH_VECTOR(LoRaPacketsToForward);
             WATCH_VECTOR(LoRaPacketsForwarded);
             WATCH_VECTOR(DataPacketsForMe);
+            WATCH(appMode);
         }
 
         if (numberOfDestinationsPerNode == 0 ) {
@@ -348,6 +346,7 @@ void LoRaNodeApp::initialize(int stage) {
 
         selfPacketTxMsg = new cMessage("selfPacketTxMsg");
         selfTaskTimerMsg = new cMessage("selfTaskTimerMsg");
+        selfAppModeSwitchTimerMsg = new cMessage("selfAppModeSwitchTimerMsg");
 
         // Routing packets timer
         timeToFirstRoutingPacket = math::maxnan(5.0, (double)par("timeToFirstRoutingPacket"))+getTimeToNextRoutingPacket();
@@ -453,7 +452,7 @@ void LoRaNodeApp::setAppMode(AppMode newAppMode)
 
 void LoRaNodeApp::startAppModeSwitch(AppMode newAppMode, simtime_t switchingTime)
 {
-    EV_DETAIL << "Starting to change App mode from \x1b[1m" << appMode << "\x1b[0m to \x1b[1m" << newAppMode << "\x1b[0m." << endl;
+    //EV_DETAIL << "Starting to change App mode from \x1b[1m" << appMode << "\x1b[0m to \x1b[1m" << newAppMode << "\x1b[0m." << endl;
     previousAppMode = appMode;
     appMode = APP_MODE_SWITCHING;
     nextAppMode = newAppMode;
@@ -463,9 +462,36 @@ void LoRaNodeApp::startAppModeSwitch(AppMode newAppMode, simtime_t switchingTime
 
 void LoRaNodeApp::completeAppModeSwitch(AppMode newAppMode)
 {
-    EV_INFO << "App mode changed from \x1b[1m" << previousAppMode << "\x1b[0m to \x1b[1m" << newAppMode << "\x1b[0m." << endl;
+    //EV_INFO << "App mode changed from \x1b[1m" << previousAppMode << "\x1b[0m to \x1b[1m" << newAppMode << "\x1b[0m." << endl;
     appMode = previousAppMode = nextAppMode = newAppMode;
     emit(appModeChangedSignal, newAppMode);
+}
+
+void LoRaNodeApp::cleanTeardown()
+{
+    for (std::vector<LoRaAppPacket>::iterator lbptr = LoRaPacketsToSend.begin();
+            lbptr < LoRaPacketsToSend.end(); lbptr++) {
+        LoRaPacketsToSend.erase(lbptr);
+    }
+
+    for (std::vector<LoRaAppPacket>::iterator lbptr =
+            LoRaPacketsToForward.begin(); lbptr < LoRaPacketsToForward.end();
+            lbptr++) {
+        LoRaPacketsToForward.erase(lbptr);
+    }
+
+    for (std::vector<LoRaAppPacket>::iterator lbptr =
+            LoRaPacketsForwarded.begin(); lbptr < LoRaPacketsForwarded.end();
+            lbptr++) {
+        LoRaPacketsForwarded.erase(lbptr);
+    }
+
+    for (std::vector<LoRaAppPacket>::iterator lbptr =
+            DataPacketsForMe.begin(); lbptr < DataPacketsForMe.end();
+            lbptr++) {
+        DataPacketsForMe.erase(lbptr);
+    }
+    cancelEvent(selfTaskTimerMsg);
 }
 
 void LoRaNodeApp::finish() {
@@ -531,29 +557,6 @@ void LoRaNodeApp::finish() {
 
     recordScalar("forwardBufferFull", forwardBufferFull);
 
-    for (std::vector<LoRaAppPacket>::iterator lbptr = LoRaPacketsToSend.begin();
-            lbptr < LoRaPacketsToSend.end(); lbptr++) {
-        LoRaPacketsToSend.erase(lbptr);
-    }
-
-    for (std::vector<LoRaAppPacket>::iterator lbptr =
-            LoRaPacketsToForward.begin(); lbptr < LoRaPacketsToForward.end();
-            lbptr++) {
-        LoRaPacketsToForward.erase(lbptr);
-    }
-
-    for (std::vector<LoRaAppPacket>::iterator lbptr =
-            LoRaPacketsForwarded.begin(); lbptr < LoRaPacketsForwarded.end();
-            lbptr++) {
-        LoRaPacketsForwarded.erase(lbptr);
-    }
-
-    for (std::vector<LoRaAppPacket>::iterator lbptr =
-            DataPacketsForMe.begin(); lbptr < DataPacketsForMe.end();
-            lbptr++) {
-        DataPacketsForMe.erase(lbptr);
-    }
-
     recordScalar("dataPacketsForMeLatencyMax", dataPacketsForMeLatency.getMax());
     recordScalar("dataPacketsForMeLatencyMean", dataPacketsForMeLatency.getMean());
     recordScalar("dataPacketsForMeLatencyMin", dataPacketsForMeLatency.getMin());
@@ -588,6 +591,8 @@ void LoRaNodeApp::finish() {
 
     dataPacketsForMeLatency.recordAs("dataPacketsForMeLatency");
     dataPacketsForMeUniqueLatency.recordAs("dataPacketsForMeUniqueLatency");
+
+    cleanTeardown();
 }
 
 void LoRaNodeApp::handlePacketTxSelfMessage(cMessage *msg) {
@@ -713,15 +718,6 @@ void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
     }
 }
 
-void LoRaNodeApp::handleMessage(cMessage *msg) {
-
-    if (msg->isSelfMessage()) {
-        handleSelfMessage(msg);
-    } else {
-        handleMessageFromLowerLayer(msg);
-    }
-}
-
 void LoRaNodeApp::handleMessageFromLowerLayer(cMessage *msg) {
     receivedPackets++;
 
@@ -780,6 +776,29 @@ void LoRaNodeApp::handleMessageFromLowerLayer(cMessage *msg) {
             lastDataPacketReceptionTime = simTime();
         }
     }
+}
+
+void LoRaNodeApp::handleMessage(cMessage *msg) {
+
+    if (msg->isSelfMessage()) {
+        handleSelfMessage(msg);
+    } else {
+        handleMessageFromLowerLayer(msg);
+    }
+}
+
+bool LoRaNodeApp::handleOperationStage(LifecycleOperation *operation,
+        IDoneCallback *doneCallback) {
+    Enter_Method_Silent();
+
+    if (dynamic_cast<ModuleCrashOperation *>(operation)) {
+        EV_INFO << "LoRa Node crashed!";
+        cleanTeardown();
+    }
+    else
+        throw cRuntimeError("Unsupported lifecycle operation '%s'",
+                            operation->getClassName());
+    return true;
 }
 
 void LoRaNodeApp::manageReceivedRoutingPacket(cMessage *msg) {
@@ -1192,15 +1211,6 @@ void LoRaNodeApp::manageReceivedAckPacketForMe(cMessage *msg) {
     const auto & packet = pkt->peekAtFront<LoRaAppPacket>();
 
     // TODO: Log fire alarm is received (this should be the "next-to-gateway" node)
-}
-
-bool LoRaNodeApp::handleOperationStage(LifecycleOperation *operation,
-        IDoneCallback *doneCallback) {
-    Enter_Method_Silent();
-
-    throw cRuntimeError("Unsupported lifecycle operation '%s'",
-            operation->getClassName());
-    return true;
 }
 
 simtime_t LoRaNodeApp::sendDataPacket() {

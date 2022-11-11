@@ -52,8 +52,6 @@ void LoRaRadioEnergyConsumer::initialize(int stage)
         radioModule->subscribe(IRadio::transmissionStateChangedSignal, this);
         radioModule->subscribe(IRadio::receivedSignalPartChangedSignal, this);
         radioModule->subscribe(IRadio::transmittedSignalPartChangedSignal, this);
-        //radioModule->subscribe(EpEnergyStorageBase::residualEnergyCapacityChangedSignal, this);
-        //radioModule->subscribe(IdealEpEnergyStorage::residualEnergyCapacityChangedSignal, this);
         radio = check_and_cast<IRadio *>(radioModule);
 
         //energySource.reference(this, "energySourceModule", true);

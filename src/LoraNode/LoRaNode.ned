@@ -20,7 +20,8 @@ import inet.networklayer.common.InterfaceTable;
 import inet.applications.contract.IApp;
 import flora.LoRa.LoRaNic;
 import inet.power.contract.IEnergyConsumer;
-import inet.power.storage.IdealEpEnergyStorage;
+import inet.power.contract.IEnergyStorage;
+import inet.common.lifecycle.NodeStatus;
 
 
 module LoRaNode
@@ -38,10 +39,11 @@ module LoRaNode
         double maxGatewayDistance = default(320.0);
         double gatewayX = default(320.0);
         double gatewayY = default(320.0);
+        bool hasStatus = default(false);
 
         @networkNode();
         *.interfaceTableModule = default(absPath(".interfaceTable"));
-        @display("bgb=496,313;i=device/accesspoint;is=vs");
+        @display("bgb=496,313;i=device/lora_node;is=vs");
     submodules:
         interfaceTable: InterfaceTable {
             @display("p=59,37");
@@ -59,8 +61,11 @@ module LoRaNode
         appEnergyConsumer: <default("")> like IEnergyConsumer if typename != "" {
             @display("p=393,219");
         }
-        IdealEpEnergyStorage: IdealEpEnergyStorage {
-            @display("p=178,296");
+        energyStorage: <default("")> like IEnergyStorage if typename != "" {
+            @display("p=125,400;is=s");
+        }
+        status: NodeStatus if hasStatus {
+            @display("p=100,100;is=s");
         }
     connections allowunconnected:
         for i=0..numApps-1 {

@@ -17,7 +17,6 @@
 #define LORAENERGYMODULES_LORARADIOENERGYCONSUMER_H_
 
 #include "inet/physicallayer/wireless/common/energyconsumer/StateBasedEpEnergyConsumer.h"
-#include "inet/power/storage/IdealEpEnergyStorage.h"
 #include <map>
 #include "inet/common/ModuleAccess.h"
 

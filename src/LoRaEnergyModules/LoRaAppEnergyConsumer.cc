@@ -46,16 +46,18 @@ void LoRaAppEnergyConsumer::receiveSignal(cComponent *source, simsignal_t signal
     if (signal == LoRaNodeApp::appModeChangedSignal)
     {
         powerConsumption = getPowerConsumption();
-        //EV_INFO << "Power consumption: " << powerConsumption << endl;
         emit(powerConsumptionChangedSignal, powerConsumption.get());
 
         simtime_t currentSimulationTime = simTime();
-      //if (currentSimulationTime != lastEnergyBalanceUpdate) {
         energyBalance += s((currentSimulationTime - lastEnergyBalanceUpdate).dbl()) * (lastPowerConsumption);
         totalEnergyConsumed = (energyBalance.get());
+//        EV_INFO << "Power consumption: " << powerConsumption
+//                << " Last power consumption: " << lastPowerConsumption
+//                << " Elapsed time (ms): " << ms((currentSimulationTime - lastEnergyBalanceUpdate).dbl())
+//                << " Energy Balance delta: " << (s((currentSimulationTime - lastEnergyBalanceUpdate).dbl()) * (lastPowerConsumption)).get()
+//                << endl;
         lastEnergyBalanceUpdate = currentSimulationTime;
         lastPowerConsumption = powerConsumption;
-      //}
     }
     else
         throw cRuntimeError("Unknown signal");
@@ -69,10 +71,6 @@ W LoRaAppEnergyConsumer::getPowerConsumption() const
       return sleepAppPowerConsumption;
     else if (appMode == LoRaNodeApp::APP_MODE_RUN)
       return runAppPowerConsumption;
-    else if (appMode == LoRaNodeApp::APP_MODE_SWITCHING)
-      return W(0);
-    else
-      throw cRuntimeError("Unknown app mode");
 
     return powerConsumption;
 }

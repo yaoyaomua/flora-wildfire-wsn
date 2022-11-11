@@ -323,6 +323,7 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         void handlePacketTxSelfMessage(cMessage *msg);
         void handleTaskTimerSelfMessage(cMessage *msg);
         void handleAppModeSwitchTimerSelfMessage(cMessage *msg);
+        void cleanTeardown(void);
 };
 
 }
