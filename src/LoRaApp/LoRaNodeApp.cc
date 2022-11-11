@@ -40,6 +40,14 @@ namespace flora {
 
 Define_Module(LoRaNodeApp);
 
+simsignal_t LoRaNodeApp::appModeChangedSignal = cComponent::registerSignal("appModeChanged");
+cEnum *LoRaNodeApp::appModeEnum = nullptr;
+
+Register_Enum(LoRaNodeApp::AppMode,
+    (LoRaNodeApp::APP_MODE_SLEEP,
+     LoRaNodeApp::APP_MODE_RUN,
+     LoRaNodeApp::APP_MODE_SWITCHING));
+
 void LoRaNodeApp::initialize(int stage) {
     cSimpleModule::initialize(stage);
 
@@ -106,6 +114,9 @@ void LoRaNodeApp::initialize(int stage) {
         {
             throw cRuntimeError("This module doesn't support starting in node DOWN state");
         }
+
+        initializeAppMode();
+        parseAppModeSwitchingTimes();
 
         // Initialize counters
         sentPackets = 0;
@@ -326,6 +337,7 @@ void LoRaNodeApp::initialize(int stage) {
             WATCH_VECTOR(LoRaPacketsToForward);
             WATCH_VECTOR(LoRaPacketsForwarded);
             WATCH_VECTOR(DataPacketsForMe);
+            WATCH(appMode);
         }
 
         if (numberOfDestinationsPerNode == 0 ) {
@@ -334,6 +346,7 @@ void LoRaNodeApp::initialize(int stage) {
 
         selfPacketTxMsg = new cMessage("selfPacketTxMsg");
         selfTaskTimerMsg = new cMessage("selfTaskTimerMsg");
+        selfAppModeSwitchTimerMsg = new cMessage("selfAppModeSwitchTimerMsg");
 
         // Routing packets timer
         timeToFirstRoutingPacket = math::maxnan(5.0, (double)par("timeToFirstRoutingPacket"))+getTimeToNextRoutingPacket();
@@ -376,6 +389,109 @@ std::pair<double, double> LoRaNodeApp::generateUniformCircleCoordinates(
     y = gatewayY - y;
     std::pair<double, double> coordValues = std::make_pair(x, y);
     return coordValues;
+}
+
+void LoRaNodeApp::initializeAppMode() {
+    const char *initialAppMode = par("initialAppMode");
+    if (!strcmp(initialAppMode, "sleep"))
+        completeAppModeSwitch(LoRaNodeApp::APP_MODE_SLEEP);
+    else if (!strcmp(initialAppMode, "run"))
+        completeAppModeSwitch(LoRaNodeApp::APP_MODE_RUN);
+    else
+        throw cRuntimeError("Unknown initialAppMode");
+}
+
+void LoRaNodeApp::parseAppModeSwitchingTimes()
+{
+    const char *times = par("switchingTimes");
+
+    char prefix[3];
+    unsigned int count = sscanf(times, "%s", prefix);
+
+    if (count > 2)
+        throw cRuntimeError("Metric prefix should be no more than two characters long");
+
+    double metric = 1;
+
+    if (strcmp("s", prefix) == 0)
+        metric = 1;
+    else if (strcmp("ms", prefix) == 0)
+        metric = 0.001;
+    else if (strcmp("ns", prefix) == 0)
+        metric = 0.000000001;
+    else
+        throw cRuntimeError("Undefined or missed metric prefix for switchingTimes parameter");
+
+    cStringTokenizer tok(times + count + 1);
+    unsigned int idx = 0;
+    while (tok.hasMoreTokens()) {
+        switchingTimes[idx / APP_MODE_SWITCHING][idx % APP_MODE_SWITCHING] = atof(tok.nextToken()) * metric;
+        idx++;
+    }
+    if (idx != APP_MODE_SWITCHING * APP_MODE_SWITCHING)
+        throw cRuntimeError("Check your switchingTimes parameter! Some parameters may be missed");
+}
+
+void LoRaNodeApp::setAppMode(AppMode newAppMode)
+{
+    Enter_Method("setAppMode");
+    if (newAppMode < APP_MODE_SLEEP || newAppMode > APP_MODE_SWITCHING)
+        throw cRuntimeError("Unknown app mode: %d", newAppMode);
+    else if (newAppMode == APP_MODE_SWITCHING)
+        throw cRuntimeError("Cannot switch manually to APP_MODE_SWITCHING");
+    else if (appMode == APP_MODE_SWITCHING || selfAppModeSwitchTimerMsg->isScheduled())
+        throw cRuntimeError("Cannot switch to a new APP mode while another switch is in progress");
+    else if (newAppMode != appMode && newAppMode != nextAppMode) {
+        simtime_t switchingTime = switchingTimes[appMode][newAppMode];
+        if (switchingTime != 0)
+            startAppModeSwitch(newAppMode, switchingTime);
+        else
+            completeAppModeSwitch(newAppMode);
+    }
+}
+
+void LoRaNodeApp::startAppModeSwitch(AppMode newAppMode, simtime_t switchingTime)
+{
+    //EV_DETAIL << "Starting to change App mode from \x1b[1m" << appMode << "\x1b[0m to \x1b[1m" << newAppMode << "\x1b[0m." << endl;
+    previousAppMode = appMode;
+    appMode = APP_MODE_SWITCHING;
+    nextAppMode = newAppMode;
+    emit(appModeChangedSignal, appMode);
+    scheduleAfter(switchingTime, selfAppModeSwitchTimerMsg);
+}
+
+void LoRaNodeApp::completeAppModeSwitch(AppMode newAppMode)
+{
+    //EV_INFO << "App mode changed from \x1b[1m" << previousAppMode << "\x1b[0m to \x1b[1m" << newAppMode << "\x1b[0m." << endl;
+    appMode = previousAppMode = nextAppMode = newAppMode;
+    emit(appModeChangedSignal, newAppMode);
+}
+
+void LoRaNodeApp::cleanTeardown()
+{
+    for (std::vector<LoRaAppPacket>::iterator lbptr = LoRaPacketsToSend.begin();
+            lbptr < LoRaPacketsToSend.end(); lbptr++) {
+        LoRaPacketsToSend.erase(lbptr);
+    }
+
+    for (std::vector<LoRaAppPacket>::iterator lbptr =
+            LoRaPacketsToForward.begin(); lbptr < LoRaPacketsToForward.end();
+            lbptr++) {
+        LoRaPacketsToForward.erase(lbptr);
+    }
+
+    for (std::vector<LoRaAppPacket>::iterator lbptr =
+            LoRaPacketsForwarded.begin(); lbptr < LoRaPacketsForwarded.end();
+            lbptr++) {
+        LoRaPacketsForwarded.erase(lbptr);
+    }
+
+    for (std::vector<LoRaAppPacket>::iterator lbptr =
+            DataPacketsForMe.begin(); lbptr < DataPacketsForMe.end();
+            lbptr++) {
+        DataPacketsForMe.erase(lbptr);
+    }
+    cancelEvent(selfTaskTimerMsg);
 }
 
 void LoRaNodeApp::finish() {
@@ -441,29 +557,6 @@ void LoRaNodeApp::finish() {
 
     recordScalar("forwardBufferFull", forwardBufferFull);
 
-    for (std::vector<LoRaAppPacket>::iterator lbptr = LoRaPacketsToSend.begin();
-            lbptr < LoRaPacketsToSend.end(); lbptr++) {
-        LoRaPacketsToSend.erase(lbptr);
-    }
-
-    for (std::vector<LoRaAppPacket>::iterator lbptr =
-            LoRaPacketsToForward.begin(); lbptr < LoRaPacketsToForward.end();
-            lbptr++) {
-        LoRaPacketsToForward.erase(lbptr);
-    }
-
-    for (std::vector<LoRaAppPacket>::iterator lbptr =
-            LoRaPacketsForwarded.begin(); lbptr < LoRaPacketsForwarded.end();
-            lbptr++) {
-        LoRaPacketsForwarded.erase(lbptr);
-    }
-
-    for (std::vector<LoRaAppPacket>::iterator lbptr =
-            DataPacketsForMe.begin(); lbptr < DataPacketsForMe.end();
-            lbptr++) {
-        DataPacketsForMe.erase(lbptr);
-    }
-
     recordScalar("dataPacketsForMeLatencyMax", dataPacketsForMeLatency.getMax());
     recordScalar("dataPacketsForMeLatencyMean", dataPacketsForMeLatency.getMean());
     recordScalar("dataPacketsForMeLatencyMin", dataPacketsForMeLatency.getMin());
@@ -498,15 +591,8 @@ void LoRaNodeApp::finish() {
 
     dataPacketsForMeLatency.recordAs("dataPacketsForMeLatency");
     dataPacketsForMeUniqueLatency.recordAs("dataPacketsForMeUniqueLatency");
-}
 
-void LoRaNodeApp::handleMessage(cMessage *msg) {
-
-    if (msg->isSelfMessage()) {
-        handleSelfMessage(msg);
-    } else {
-        handleMessageFromLowerLayer(msg);
-    }
+    cleanTeardown();
 }
 
 void LoRaNodeApp::handlePacketTxSelfMessage(cMessage *msg) {
@@ -609,16 +695,24 @@ void LoRaNodeApp::handlePacketTxSelfMessage(cMessage *msg) {
 }
 
 void LoRaNodeApp::handleTaskTimerSelfMessage(cMessage *msg) {
-    // EV_INFO << "Periodic task timer!" << endl;
+    setAppMode(APP_MODE_RUN);
     // TODO: Add fire detection task code
+    setAppMode(APP_MODE_SLEEP);
     scheduleAt(simTime() + timeToNextTaskTimerTick, selfTaskTimerMsg);
 }
 
+void LoRaNodeApp::handleAppModeSwitchTimerSelfMessage(cMessage *msg) {
+    completeAppModeSwitch(nextAppMode);
+}
+
 void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
+
     if (msg == selfPacketTxMsg) {
         handlePacketTxSelfMessage(msg);
     } else if (msg == selfTaskTimerMsg) {
         handleTaskTimerSelfMessage(msg);
+    } else if (msg == selfAppModeSwitchTimerMsg) {
+        handleAppModeSwitchTimerSelfMessage(msg);
     } else {
         throw cRuntimeError("Unknown self message");
     }
@@ -682,6 +776,29 @@ void LoRaNodeApp::handleMessageFromLowerLayer(cMessage *msg) {
             lastDataPacketReceptionTime = simTime();
         }
     }
+}
+
+void LoRaNodeApp::handleMessage(cMessage *msg) {
+
+    if (msg->isSelfMessage()) {
+        handleSelfMessage(msg);
+    } else {
+        handleMessageFromLowerLayer(msg);
+    }
+}
+
+bool LoRaNodeApp::handleOperationStage(LifecycleOperation *operation,
+        IDoneCallback *doneCallback) {
+    Enter_Method_Silent();
+
+    if (dynamic_cast<ModuleCrashOperation *>(operation)) {
+        EV_INFO << "LoRa Node crashed!";
+        cleanTeardown();
+    }
+    else
+        throw cRuntimeError("Unsupported lifecycle operation '%s'",
+                            operation->getClassName());
+    return true;
 }
 
 void LoRaNodeApp::manageReceivedRoutingPacket(cMessage *msg) {
@@ -1094,15 +1211,6 @@ void LoRaNodeApp::manageReceivedAckPacketForMe(cMessage *msg) {
     const auto & packet = pkt->peekAtFront<LoRaAppPacket>();
 
     // TODO: Log fire alarm is received (this should be the "next-to-gateway" node)
-}
-
-bool LoRaNodeApp::handleOperationStage(LifecycleOperation *operation,
-        IDoneCallback *doneCallback) {
-    Enter_Method_Silent();
-
-    throw cRuntimeError("Unsupported lifecycle operation '%s'",
-            operation->getClassName());
-    return true;
 }
 
 simtime_t LoRaNodeApp::sendDataPacket() {
@@ -1931,6 +2039,13 @@ void LoRaNodeApp::setCR(int CR) {
 
 int LoRaNodeApp::getCR() {
     return loRaRadio->loRaCR;
+}
+
+const char *LoRaNodeApp::getAppModeName(AppMode appMode)
+{
+    if (!appModeEnum)
+        appModeEnum = cEnum::get(opp_typename(typeid(LoRaNodeApp::AppMode)));
+    return appModeEnum->getStringFor(appMode) + 11;
 }
 
 void LoRaNodeApp::setLoRaTagToPkt(Packet *packet, int customSF) {

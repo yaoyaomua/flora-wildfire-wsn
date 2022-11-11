@@ -39,8 +39,27 @@ namespace flora {
  */
 class LoRaNodeApp : public cSimpleModule, public ILifecycle
 {
+    public:
+        LoRaNodeApp() {}
+        simsignal_t LoRa_AppPacketSent;
+
+        static simsignal_t appModeChangedSignal;
+
+        enum AppMode {
+            APP_MODE_SLEEP,
+            APP_MODE_RUN,
+            APP_MODE_SWITCHING // this mode must be the very last
+        };
+
+        virtual AppMode getAppMode() const  { return appMode; }
+        virtual void setAppMode(AppMode newAppMode);
+        static const char *getAppModeName(AppMode appMode);
+
+
     protected:
         virtual void initialize(int stage) override;
+        virtual void initializeAppMode();
+
         void finish() override;
         virtual int numInitStages() const override { return NUM_INIT_STAGES; }
         virtual void handleMessage(cMessage *msg) override;
@@ -58,8 +77,6 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         virtual bool isDataPacketForMeUnique(const LoRaAppPacket & packet);
 
         void handleMessageFromLowerLayer(cMessage *msg);
-        void handlePacketTxSelfMessage(cMessage *msg);
-        void handleTaskTimerSelfMessage(cMessage *msg);
         void handleSelfMessage(cMessage *msg);
 
         simtime_t getTimeToNextRoutingPacket();
@@ -293,9 +310,20 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
 
         void setLoRaTagToPkt(Packet *packet, int customSF=-1);
 
-    public:
-        LoRaNodeApp() {}
-        simsignal_t LoRa_AppPacketSent;
+        static cEnum *appModeEnum;
+
+        simtime_t switchingTimes[APP_MODE_SWITCHING][APP_MODE_SWITCHING];
+        AppMode appMode, nextAppMode, previousAppMode;
+        cMessage *selfAppModeSwitchTimerMsg;
+
+    private:
+        void parseAppModeSwitchingTimes();
+        void startAppModeSwitch(AppMode newAppMode, simtime_t switchingTime);
+        void completeAppModeSwitch(AppMode newAppMode);
+        void handlePacketTxSelfMessage(cMessage *msg);
+        void handleTaskTimerSelfMessage(cMessage *msg);
+        void handleAppModeSwitchTimerSelfMessage(cMessage *msg);
+        void cleanTeardown(void);
 };
 
 }

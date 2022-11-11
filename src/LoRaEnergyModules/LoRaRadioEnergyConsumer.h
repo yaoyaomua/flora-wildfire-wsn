@@ -13,11 +13,10 @@
 // along with this program.  If not, see http://www.gnu.org/licenses/.
 // 
 
-#ifndef LORAENERGYMODULES_LORAENERGYCONSUMER_H_
-#define LORAENERGYMODULES_LORAENERGYCONSUMER_H_
+#ifndef LORAENERGYMODULES_LORARADIOENERGYCONSUMER_H_
+#define LORAENERGYMODULES_LORARADIOENERGYCONSUMER_H_
 
 #include "inet/physicallayer/wireless/common/energyconsumer/StateBasedEpEnergyConsumer.h"
-#include "inet/power/storage/IdealEpEnergyStorage.h"
 #include <map>
 #include "inet/common/ModuleAccess.h"
 
@@ -25,13 +24,14 @@ using namespace inet;
 
 namespace flora {
 
-class LoRaEnergyConsumer: public inet::physicallayer::StateBasedEpEnergyConsumer {
+class LoRaRadioEnergyConsumer: public inet::physicallayer::StateBasedEpEnergyConsumer {
 public:
     void initialize(int stage) override;
     void finish() override;
     virtual W getPowerConsumption() const override;
     bool readConfigurationFile();
     virtual void receiveSignal(cComponent *source, simsignal_t signal, intval_t value, cObject *details) override;
+    virtual power::IEnergySource *getEnergySource() const override { return energySourceP; }
 
 protected:
     int energyConsumerId;
@@ -49,8 +49,11 @@ protected:
     // map between txPower (dBm) and supply current (mA)
     std::map<double, double> transmitterTransmittingSupplyCurrent;
 
+    // environment
+    opp_component_ptr<power::IEpEnergySource> energySourceP;
 
 };
 
 }
-#endif /* LORAENERGYMODULES_LORAENERGYCONSUMER_H_ */
+#endif /* LORAENERGYMODULES_LORARADIOENERGYCONSUMER_H_ */
+
