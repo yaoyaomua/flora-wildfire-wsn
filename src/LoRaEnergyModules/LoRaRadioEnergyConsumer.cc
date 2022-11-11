@@ -13,22 +13,21 @@
 // along with this program.  If not, see http://www.gnu.org/licenses/.
 // 
 
-#include "LoRaEnergyConsumer.h"
-
 #include "inet/physicallayer/wireless/common/contract/packetlevel/IRadio.h"
 #include "LoRaPhy/LoRaTransmitter.h"
+#include "LoRaRadioEnergyConsumer.h"
 namespace flora {
 
 using namespace inet::power;
 
-Define_Module(LoRaEnergyConsumer);
+Define_Module(LoRaRadioEnergyConsumer);
 
-void LoRaEnergyConsumer::initialize(int stage)
+void LoRaRadioEnergyConsumer::initialize(int stage)
 {
     cSimpleModule::initialize(stage);
     if (stage == INITSTAGE_LOCAL) {
         if (!readConfigurationFile())
-            throw cRuntimeError("LoRaEnergyConsumer: error in reading the input configuration file");
+            throw cRuntimeError("LoRaRadioEnergyConsumer: error in reading the input configuration file");
         standbySupplyCurrent = 0;
         sleepSupplyCurrent = 0;
         sleepPowerConsumption = mW(supplyVoltage*sleepSupplyCurrent);
@@ -66,12 +65,12 @@ void LoRaEnergyConsumer::initialize(int stage)
         energySource->addEnergyConsumer(this);
 }
 
-void LoRaEnergyConsumer::finish()
+void LoRaRadioEnergyConsumer::finish()
 {
     recordScalar("totalEnergyConsumed", double(totalEnergyConsumed));
 }
 
-bool LoRaEnergyConsumer::readConfigurationFile()
+bool LoRaRadioEnergyConsumer::readConfigurationFile()
 {
     cXMLElement *xmlConfig = par("configFile").xmlValue();
     if (xmlConfig == nullptr)
@@ -137,7 +136,7 @@ bool LoRaEnergyConsumer::readConfigurationFile()
     return true;
 }
 
-void LoRaEnergyConsumer::receiveSignal(cComponent *source, simsignal_t signal, intval_t value, cObject *details)
+void LoRaRadioEnergyConsumer::receiveSignal(cComponent *source, simsignal_t signal, intval_t value, cObject *details)
 {
     if (signal == IRadio::radioModeChangedSignal ||
         signal == IRadio::receptionStateChangedSignal ||
@@ -160,7 +159,7 @@ void LoRaEnergyConsumer::receiveSignal(cComponent *source, simsignal_t signal, i
         throw cRuntimeError("Unknown signal");
 }
 
-W LoRaEnergyConsumer::getPowerConsumption() const
+W LoRaRadioEnergyConsumer::getPowerConsumption() const
 {
     IRadio::RadioMode radioMode = radio->getRadioMode();
 
@@ -223,3 +222,4 @@ W LoRaEnergyConsumer::getPowerConsumption() const
     return powerConsumption;
 }
 }
+

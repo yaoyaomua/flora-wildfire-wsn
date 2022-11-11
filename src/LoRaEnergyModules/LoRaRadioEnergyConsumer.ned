@@ -18,9 +18,9 @@ package flora.LoRaEnergyModules;
 import inet.physicallayer.wireless.common.energyconsumer.StateBasedEpEnergyConsumer;
 
 
-simple LoRaEnergyConsumer extends StateBasedEpEnergyConsumer
+simple LoRaRadioEnergyConsumer extends StateBasedEpEnergyConsumer
 {
     parameters:
         xml configFile;
-        @class(LoRaEnergyConsumer);
+        @class(LoRaRadioEnergyConsumer);
 }

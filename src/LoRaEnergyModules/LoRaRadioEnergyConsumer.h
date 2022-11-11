@@ -13,8 +13,8 @@
 // along with this program.  If not, see http://www.gnu.org/licenses/.
 // 
 
-#ifndef LORAENERGYMODULES_LORAENERGYCONSUMER_H_
-#define LORAENERGYMODULES_LORAENERGYCONSUMER_H_
+#ifndef LORAENERGYMODULES_LORARADIOENERGYCONSUMER_H_
+#define LORAENERGYMODULES_LORARADIOENERGYCONSUMER_H_
 
 #include "inet/physicallayer/wireless/common/energyconsumer/StateBasedEpEnergyConsumer.h"
 #include "inet/power/storage/IdealEpEnergyStorage.h"
@@ -25,7 +25,7 @@ using namespace inet;
 
 namespace flora {
 
-class LoRaEnergyConsumer: public inet::physicallayer::StateBasedEpEnergyConsumer {
+class LoRaRadioEnergyConsumer: public inet::physicallayer::StateBasedEpEnergyConsumer {
 public:
     void initialize(int stage) override;
     void finish() override;
@@ -53,4 +53,5 @@ protected:
 };
 
 }
-#endif /* LORAENERGYMODULES_LORAENERGYCONSUMER_H_ */
+#endif /* LORAENERGYMODULES_LORARADIOENERGYCONSUMER_H_ */
+

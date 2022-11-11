@@ -15,15 +15,15 @@
 
 package flora.LoRaEnergyModules;
 
-import inet.physicallayer.wireless.common.energyconsumer.StateBasedEpEnergyConsumer;
+import inet.power.base.EpEnergyConsumerBase;
 
 
-simple LoRaAppEnergyConsumer extends StateBasedEpEnergyConsumer
+simple LoRaAppEnergyConsumer extends EpEnergyConsumerBase
 {
     parameters:
-        xml configFile;
-        double sleepAppPowerConsumption @unit(W) = default(1mW);
-        double runAppPowerConsumption @unit(W) = default(100mW);
-        double switchingAppPowerConsumption @unit(W) = default(100mW);
         @class(LoRaAppEnergyConsumer);
+        string energySourceModule = default("^.energyStorage"); // module path of energy source
+        volatile double powerConsumption @unit(W); // amount of power consumed in consumption mode default(0mW);
+        volatile double consumptionInterval @unit(s); // time interval for consumption mode
+        volatile double sleepInterval @unit(s); // time interval for sleep mode
 }
