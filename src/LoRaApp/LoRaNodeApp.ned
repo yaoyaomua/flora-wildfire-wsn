@@ -78,6 +78,19 @@ simple LoRaNodeApp like IApp
         string initialAppMode @enum("sleep","run") = default("sleep");
         string switchingTimes = default("ms 0 0 0 0"); // time parameters to switch between app modes
 
+        double averageUpdateSensorWeight = default(0.25);
+        double iniTemperature = default(20);
+        double iniHumidity = default(50);
+        double temperatureFireThreshold = default(70);
+        double humidityFireThreshold = default(0.2);
+
+        volatile double timeToForceFireStart @unit(s) = default(1000s);
+        bool forceFireSensors = default(false);
+        bool forceFireCondition = default(false);
+        int fireAlarmGatewayNodeId = default(0);
+        bool fireAlarmNever = default(false);
+        bool fireAlarmOnce = default(false);
+
         @signal[appModeChanged](type=long);
         @statistic[appMode](title="App mode"; source=appModeChanged; record=count,vector; interpolationmode=sample-hold);
 
