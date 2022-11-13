@@ -59,7 +59,7 @@ void LoRaNodeApp::initialize(int stage) {
         nodeId = getContainingNode(this)->getIndex();
         std::pair<double, double> coordsValues = std::make_pair(-1, -1);
         cModule *host = getContainingNode(this);
-
+        if (strcmp(host->par("deploymentType").stringValue(), "manual") == 0) {} else
         // Generate random location for nodes if circle deployment type
         if (strcmp(host->par("deploymentType").stringValue(), "circle") == 0) {
             coordsValues = generateUniformCircleCoordinates(

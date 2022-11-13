@@ -21,6 +21,8 @@
 *.app
 src/flora
 src/flora_dbg
+src/libflora.def
+src/libflora_dbg.def
 
 src/**/*_m.h
 src/**/*_m.cc
@@ -35,3 +37,4 @@ simulations/**/.qtenvrc
 simulations/**/.cmdenv-log
 simulations/**/valgrind.out
 simulations/**/log.txt
+
