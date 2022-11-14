@@ -272,7 +272,7 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         bool forceFireCondition;
 
         int fireAlarmGatewayNodeId;
-        bool fireAlarmNever;
+        bool fireAlarmEnable;
         bool fireAlarmOnce;
         bool fireAlarmTriggered;
 

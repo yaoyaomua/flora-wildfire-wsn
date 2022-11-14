@@ -88,7 +88,7 @@ simple LoRaNodeApp like IApp
         bool forceFireSensors = default(false);
         bool forceFireCondition = default(false);
         int fireAlarmGatewayNodeId = default(0);
-        bool fireAlarmNever = default(false);
+        bool fireAlarmEnable = default(false);
         bool fireAlarmOnce = default(false);
 
         @signal[appModeChanged](type=long);

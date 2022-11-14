@@ -174,7 +174,7 @@ void LoRaNodeApp::initialize(int stage) {
         forceFireCondition = par("forceFireCondition");
 
         fireAlarmGatewayNodeId = par("fireAlarmGatewayNodeId");
-        fireAlarmNever = par("fireAlarmNever");
+        fireAlarmEnable = par("fireAlarmEnable");
         fireAlarmOnce = par("fireAlarmOnce");
         fireAlarmTriggered = false;
 
@@ -713,7 +713,7 @@ void LoRaNodeApp::handleTaskTimerSelfMessage(cMessage *msg) {
     //         << endl;
 
     // TODO: Humidity threshold should be lower than (also fix HumiditySensor fire condition)
-    bool fireAlarmCondition = !fireAlarmNever && ((fireAlarmOnce && !fireAlarmTriggered) || !fireAlarmOnce);
+    bool fireAlarmCondition = fireAlarmEnable && ((fireAlarmOnce && !fireAlarmTriggered) || !fireAlarmOnce);
     bool fireCondition = (averageTemp > tempFireThreshold) && (averageHumidity > humidityFireThreshold);
 
     if (fireAlarmCondition && (fireCondition || (forceFireCondition && isForceFireTime))) {
