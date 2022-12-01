@@ -9,6 +9,7 @@
 #include "LoRaMacControlInfo_m.h"
 #include "LoRaMacFrame_m.h"
 #include "LoRaApp/LoRaAppPacket_m.h"
+#include "LoRaApp/LoRaNodeApp.h"
 #include "inet/common/Protocol.h"
 #include "inet/queueing/contract/IActivePacketSink.h"
 #include "inet/queueing/contract/IPacketQueue.h"
@@ -71,13 +72,11 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     //@{
     enum State {
         IDLE,
+        ACTIVE,
+        DEFER,
+        BACKOFF,
         TRANSMIT,
-        WAIT_DELAY_1,
-        LISTENING_1,
-        RECEIVING_1,
-        WAIT_DELAY_2,
-        LISTENING_2,
-        RECEIVING_2,
+        RECEIVING,
     };
 
     IRadio *radio = nullptr;
@@ -101,6 +100,9 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
 
     /** @name Timer messages */
     //@{
+    /** Timeout before the transmission of a Data frame */
+    cMessage *startTransmission = nullptr;
+
     /** Timeout after the transmission of a Data frame */
     cMessage *endTransmission = nullptr;
 
@@ -110,17 +112,11 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     /** Timeout after the reception of a Data frame */
     cMessage *droppedPacket = nullptr;
 
-    /** End of the Delay_1 */
-    cMessage *endDelay_1 = nullptr;
+    /** Start of the Active */
+    cMessage *startActive = nullptr;
 
-    /** End of the Listening_1 */
-    cMessage *endListening_1 = nullptr;
-
-    /** End of the Delay_2 */
-    cMessage *endDelay_2 = nullptr;
-
-    /** End of the Listening_2 */
-    cMessage *endListening_2 = nullptr;
+    /** End of the Active */
+    cMessage *endActive = nullptr;
 
     /** Radio state change self message. Currently this is optimized away and sent directly */
     cMessage *mediumStateChange = nullptr;
@@ -185,6 +181,19 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     virtual void handleCrashOperation(LifecycleOperation *operation) override {}    //TODO implementation
 
     /**
+     * @name Timer functions
+     * @brief These functions have the side effect of starting the corresponding timers.
+     */
+    //@{
+    virtual void invalidateBackoffPeriod();
+    virtual bool isInvalidBackoffPeriod();
+    virtual void generateBackoffPeriod();
+    virtual void decreaseBackoffPeriod();
+    virtual void scheduleBackoffTimer();
+    virtual void cancelBackoffTimer();
+    //@}
+
+    /**
      * @name Frame transmission functions
      */
     //@{
@@ -199,7 +208,9 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     //@{
     virtual void finishCurrentTransmission();
     virtual Packet *getCurrentTransmission();
+    virtual void resetTransmissionVariables();
 
+    virtual bool isMediumFree();
     virtual bool isReceiving();
     virtual bool isAck(const Ptr<const LoRaMacFrame> &frame);
     virtual bool isBroadcast(const Ptr<const LoRaMacFrame> & msg);

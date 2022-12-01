@@ -2,7 +2,7 @@
 <root>
 	<supplyVoltage value="3.3"/>
 	<receiverReceivingSupplyCurrent value="9.7"/>
-	<receiverBusySupplyCurrent value="9.7"/>
+	<receiverBusySupplyCurrent value="0.97"/>
 	<idleSupplyCurrent value="0.0001"/>
 	<txSupplyCurrents>
 		<txSupplyCurrent txPower="2" supplyCurrent="24"/>

@@ -35,10 +35,8 @@ LoRaMac::~LoRaMac()
     cancelAndDelete(endTransmission);
     cancelAndDelete(endReception);
     cancelAndDelete(droppedPacket);
-    cancelAndDelete(endDelay_1);
-    cancelAndDelete(endListening_1);
-    cancelAndDelete(endDelay_2);
-    cancelAndDelete(endListening_2);
+    cancelAndDelete(startActive);
+    cancelAndDelete(endActive);
     cancelAndDelete(mediumStateChange);
 }
 
@@ -54,13 +52,11 @@ void LoRaMac::initialize(int stage)
         //maxQueueSize = par("maxQueueSize");
         headerLength = par("headerLength");
         ackLength = par("ackLength");
+        slotTime = par("slotTime");
+        cwMin = par("cwMin");
+        cwMax = par("cwMax");
         ackTimeout = par("ackTimeout");
         retryLimit = par("retryLimit");
-
-        waitDelay1Time = 1;
-        listening1Time = 1;
-        waitDelay2Time = 1;
-        listening2Time = 1;
 
         const char *addressString = par("address");
         if (!strcmp(addressString, "auto")) {
@@ -79,14 +75,16 @@ void LoRaMac::initialize(int stage)
         radioModule->subscribe(LoRaRadio::droppedPacket, this);
         radio = check_and_cast<IRadio *>(radioModule);
 
+        cModule *appModule = getParentModule()->getParentModule()->getSubmodule("app", 0);
+        appModule->subscribe(LoRaNodeApp::commActiveChangedSignal, this);
+
         // initialize self messages
-        endTransmission = new cMessage("Transmission");
+        endTransmission = new cMessage("EndTransmission");
         endReception = new cMessage("Reception");
+        endBackoff = new cMessage("Backoff");
         droppedPacket = new cMessage("Dropped Packet");
-        endDelay_1 = new cMessage("Delay_1");
-        endListening_1 = new cMessage("Listening_1");
-        endDelay_2 = new cMessage("Delay_2");
-        endListening_2 = new cMessage("Listening_2");
+        startActive = new cMessage("StartActive");
+        endActive = new cMessage("EndActive");
         mediumStateChange = new cMessage("MediumStateChange");
 
         // set up internal queue
@@ -126,8 +124,7 @@ void LoRaMac::initialize(int stage)
         }
     }
     else if (stage == INITSTAGE_LINK_LAYER)
-        // radio->setRadioMode(IRadio::RADIO_MODE_SLEEP);
-        radio->setRadioMode(IRadio::RADIO_MODE_RECEIVER);
+        radio->setRadioMode(IRadio::RADIO_MODE_SLEEP);
 }
 
 void LoRaMac::finish()
@@ -193,7 +190,7 @@ void LoRaMac::handleUpperPacket(cMessage *msg)
 #endif
 void LoRaMac::handleUpperPacket(Packet *packet)
 {
-    if(fsm.getState() != IDLE) {
+    if(fsm.getState() != ACTIVE) {
          error("Wrong, it should not happen erroneous state: %s", fsm.getStateName());
     }
     packet->addTagIfAbsent<PacketProtocolTag>()->setProtocol(&Protocol::apskPhy);
@@ -214,9 +211,7 @@ void LoRaMac::handleUpperPacket(Packet *packet)
 void LoRaMac::handleLowerPacket(Packet *msg)
 {
     EV << "lower packet received in state " << fsm.getState() << endl;
-    // if ((fsm.getState() == RECEIVING_1) || (fsm.getState() == RECEIVING_2)) {
-    if ((fsm.getState() == RECEIVING_1) || (fsm.getState() == RECEIVING_2) ||
-        (fsm.getState() == IDLE)) {
+    if (fsm.getState() == RECEIVING) {
         EV_INFO << "lower packet received, handling with handleWithFsm()" << endl;
         handleWithFsm(msg);
     }
@@ -239,7 +234,7 @@ queueing::IPassivePacketSource *LoRaMac::getProvider(cGate *gate)
 void LoRaMac::handleCanPullPacketChanged(cGate *gate)
 {
     Enter_Method("handleCanPullPacketChanged");
-    if (fsm.getState() == IDLE && !txQueue->isEmpty()) {
+    if (fsm.getState() == ACTIVE && !txQueue->isEmpty()) {
         processUpperPacket();
     }
 }
@@ -261,140 +256,106 @@ void LoRaMac::handleWithFsm(cMessage *msg)
     }
     EV_INFO << "handling packet with handleWithFsm(): " << fsm << endl;
 
+    if (fsm.getState() != ACTIVE && msg == endActive) {
+        throw cRuntimeError("End Active triggered while not in state");
+    }
+
     FSMA_Switch(fsm)
     {
         FSMA_State(IDLE)
         {
             EV_INFO << "handling packet with handleWithFsm(): IDLE" << endl;
             FSMA_Enter(turnOffReceiver());
-            FSMA_Event_Transition(Idle-Transmit,
-                                  isUpperMessage(msg),
-                                  TRANSMIT,
+            FSMA_Event_Transition(Idle-Active,
+                                  msg == startActive,
+                                  ACTIVE,
             );
-            FSMA_Event_Transition(Receive-Unicast,
-                                  isLowerMessage(msg) && isForUs(frame),
+        }
+        FSMA_State(ACTIVE)
+        {
+            EV_INFO << "handling packet with handleWithFsm(): ACTIVE" << endl;
+            FSMA_Enter(turnOnReceiver());
+            FSMA_Event_Transition(Active-Idle,
+                                  msg == endActive,
                                   IDLE,
-                sendUp(decapsulate(pkt));
-                numReceived++;
-                cancelEvent(endDelay_1);
-                cancelEvent(endListening_1);
-                cancelEvent(endDelay_2);
-                cancelEvent(endListening_2);
+            );
+            FSMA_Event_Transition(Defer-Transmit,
+                                  isUpperMessage(msg) && !isMediumFree(),
+                                  DEFER,
+            );
+            FSMA_Event_Transition(Start-Backoff,
+                                  isUpperMessage(msg) && isMediumFree(),
+                                  BACKOFF,
+            );
+            FSMA_Event_Transition(Start-Receiving,
+                                  msg == mediumStateChange && isReceiving(),
+                                  RECEIVING,
+            );
+        }
+        FSMA_State(DEFER)
+        {
+            FSMA_Event_Transition(Start-Backoff,
+                                  msg == mediumStateChange && isMediumFree(),
+                                  BACKOFF,
+            );
+            FSMA_Event_Transition(Start-Receiving,
+                                  msg == mediumStateChange && isReceiving(),
+                                  RECEIVING,
+            );
+        }
+        FSMA_State(BACKOFF)
+        {
+            FSMA_Enter(scheduleBackoffTimer());
+            FSMA_Event_Transition(Start-Transmit,
+                                  msg == endBackoff,
+                                  TRANSMIT,
+                invalidateBackoffPeriod();
+            );
+            FSMA_Event_Transition(Start-Receiving,
+                                  msg == mediumStateChange && isReceiving(),
+                                  RECEIVING,
+                cancelBackoffTimer();
+                decreaseBackoffPeriod();
+            );
+            FSMA_Event_Transition(Defer-Backoff,
+                                  msg == mediumStateChange && !isMediumFree(),
+                                  DEFER,
+                cancelBackoffTimer();
+                decreaseBackoffPeriod();
             );
         }
         FSMA_State(TRANSMIT)
         {
             EV_INFO << "handling packet with handleWithFsm(): TRANSMIT" << endl;
             FSMA_Enter(sendDataFrame(getCurrentTransmission()));
-            FSMA_Event_Transition(Transmit-Wait_Delay_1,
+            FSMA_Event_Transition(Transmit-Active,
                                   msg == endTransmission,
-                                  WAIT_DELAY_1,
+                                  ACTIVE,
                 finishCurrentTransmission();
                 numSent++;
             );
         }
-        FSMA_State(WAIT_DELAY_1)
+        FSMA_State(RECEIVING)
         {
-            EV_INFO << "handling packet with handleWithFsm(): WAIT_DELAY_1" << endl;
-            FSMA_Enter(turnOffReceiver());
-            FSMA_Event_Transition(Wait_Delay_1-Listening_1,
-                                  msg == endDelay_1 || endDelay_1->isScheduled() == false,
-                                  LISTENING_1,
-            );
-        }
-        FSMA_State(LISTENING_1)
-        {
-            EV_INFO << "handling packet with handleWithFsm(): LISTENING_1" << endl;
-            FSMA_Enter(turnOnReceiver());
-            FSMA_Event_Transition(Listening_1-Wait_Delay_2,
-                                  msg == endListening_1 || endListening_1->isScheduled() == false,
-                                  WAIT_DELAY_2,
-            );
-            FSMA_Event_Transition(Listening_1-Receiving1,
-                                  msg == mediumStateChange && isReceiving(),
-                                  RECEIVING_1,
-            );
-        }
-        FSMA_State(RECEIVING_1)
-        {
-            EV_INFO << "handling packet with handleWithFsm(): RECEIVING_1" << endl;
-            FSMA_Event_Transition(Receive-Unicast-Not-For,
-                                  isLowerMessage(msg) && !isForUs(frame),
-                                  LISTENING_1,
-            );
+            EV_INFO << "handling packet with handleWithFsm(): RECEIVING" << endl;
             FSMA_Event_Transition(Receive-Unicast,
-                                  isLowerMessage(msg) && isForUs(frame),
-                                  IDLE,
+                                  isLowerMessage(msg),
+                                  ACTIVE,
                 sendUp(decapsulate(pkt));
                 numReceived++;
-                cancelEvent(endListening_1);
-                cancelEvent(endDelay_2);
-                cancelEvent(endListening_2);
+                // cancelEvent(endActive);
             );
             FSMA_Event_Transition(Receive-BelowSensitivity,
                                   msg == droppedPacket,
-                                  LISTENING_1,
-            );
-        }
-        FSMA_State(WAIT_DELAY_2)
-        {
-            EV_INFO << "handling packet with handleWithFsm(): WAIT_DELAY_2" << endl;
-            FSMA_Enter(turnOffReceiver());
-            FSMA_Event_Transition(Wait_Delay_2-Listening_2,
-                                  msg == endDelay_2 || endDelay_2->isScheduled() == false,
-                                  LISTENING_2,
-            );
-        }
-        FSMA_State(LISTENING_2)
-        {
-            EV_INFO << "handling packet with handleWithFsm(): LISTENING_2" << endl;
-            FSMA_Enter(turnOnReceiver());
-            FSMA_Event_Transition(Listening_2-idle,
-                                  msg == endListening_2 || endListening_2->isScheduled() == false,
-                                  IDLE,
-            );
-            FSMA_Event_Transition(Listening_2-Receiving2,
-                                  msg == mediumStateChange && isReceiving(),
-                                  RECEIVING_2,
-            );
-        }
-        FSMA_State(RECEIVING_2)
-        {
-            EV_INFO << "handling packet with handleWithFsm(): RECEIVING_2" << endl;
-            FSMA_Event_Transition(Receive2-Unicast-Not-For,
-                                  isLowerMessage(msg) && !isForUs(frame),
-                                  LISTENING_2,
-            );
-            FSMA_Event_Transition(Receive2-Unicast,
-                                  isLowerMessage(msg) && isForUs(frame),
-                                  IDLE,
-                sendUp(pkt);
-                numReceived++;
-                cancelEvent(endListening_2);
-            );
-            FSMA_Event_Transition(Receive2-BelowSensitivity,
-                                  msg == droppedPacket,
-                                  LISTENING_2,
+                                  ACTIVE,
             );
         }
     }
 
-//    if (fsm.getState() == IDLE) {
-//        if (isReceiving())
-//            handleWithFsm(mediumStateChange);
-//        else if (currentTxFrame != nullptr)
-//            handleWithFsm(currentTxFrame);
-//        else if (!txQueue->isEmpty()) {
-//            popTxQueue();
-//            handleWithFsm(currentTxFrame);
-//        }
-//    }
-
-    if (fsm.getState() == IDLE) {
-        // TODO: Understand how new FLoRa uses this (causing infinite recursion with Mesh)
-        //if (isReceiving())
+    if (fsm.getState() == ACTIVE) {
+        // if (isReceiving())
         //    handleWithFsm(mediumStateChange);
-        //else
+        // else
         if (currentTxFrame != nullptr)
             handleWithFsm(currentTxFrame);
         else if (!txQueue->isEmpty()) {
@@ -416,26 +377,22 @@ void LoRaMac::handleWithFsm(cMessage *msg)
 void LoRaMac::receiveSignal(cComponent *source, simsignal_t signalID, intval_t value, cObject *details)
 {
     Enter_Method_Silent();
-    if (signalID == IRadio::receptionStateChangedSignal) {
+    if (signalID == LoRaNodeApp::commActiveChangedSignal) {
+        cMessage *activeChange = (value == 1) ? startActive : endActive;
+        handleWithFsm(activeChange);
+    }
+    else if (signalID == IRadio::receptionStateChangedSignal) {
         IRadio::ReceptionState newRadioReceptionState = (IRadio::ReceptionState)value;
-        if (receptionState == IRadio::RECEPTION_STATE_RECEIVING) {
-            // radio->setRadioMode(IRadio::RADIO_MODE_SLEEP);
-            radio->setRadioMode(IRadio::RADIO_MODE_RECEIVER);
-        }
         receptionState = newRadioReceptionState;
         handleWithFsm(mediumStateChange);
     }
     else if (signalID == LoRaRadio::droppedPacket) {
-        // radio->setRadioMode(IRadio::RADIO_MODE_SLEEP);
-        radio->setRadioMode(IRadio::RADIO_MODE_RECEIVER);
         handleWithFsm(droppedPacket);
     }
     else if (signalID == IRadio::transmissionStateChangedSignal) {
         IRadio::TransmissionState newRadioTransmissionState = (IRadio::TransmissionState)value;
         if (transmissionState == IRadio::TRANSMISSION_STATE_TRANSMITTING && newRadioTransmissionState == IRadio::TRANSMISSION_STATE_IDLE) {
             handleWithFsm(endTransmission);
-            // radio->setRadioMode(IRadio::RADIO_MODE_SLEEP);
-            radio->setRadioMode(IRadio::RADIO_MODE_RECEIVER);
         }
         transmissionState = newRadioTransmissionState;
     }
@@ -495,6 +452,50 @@ Packet *LoRaMac::decapsulate(Packet *frame)
     return frame;
 }
 
+void LoRaMac::invalidateBackoffPeriod()
+{
+    backoffPeriod = -1;
+}
+
+bool LoRaMac::isInvalidBackoffPeriod()
+{
+    return backoffPeriod == -1;
+}
+
+void LoRaMac::generateBackoffPeriod()
+{
+    ASSERT(0 <= retryCounter && retryCounter <= retryLimit);
+    EV << "generating backoff slot number for retry: " << retryCounter << endl;
+    int cw = std::min(cwMax, (cwMin + 1) * (1 << retryCounter) - 1);
+    int slots = intrand(cw + 1);
+    EV << "generated backoff slot number: " << slots << " , cw: " << cw << endl;
+    backoffPeriod = slots * slotTime;
+    ASSERT(backoffPeriod >= 0);
+    EV << "backoff period set to " << backoffPeriod << endl;
+}
+
+void LoRaMac::decreaseBackoffPeriod()
+{
+    simtime_t elapsedBackoffTime = simTime() - endBackoff->getSendingTime();
+    backoffPeriod -= ((int)(elapsedBackoffTime / slotTime)) * slotTime;
+    ASSERT(backoffPeriod >= 0);
+    EV << "backoff period decreased to " << backoffPeriod << endl;
+}
+
+void LoRaMac::scheduleBackoffTimer()
+{
+    EV << "scheduling backoff timer\n";
+    if (isInvalidBackoffPeriod())
+        generateBackoffPeriod();
+    scheduleAfter(backoffPeriod, endBackoff);
+}
+
+void LoRaMac::cancelBackoffTimer()
+{
+    EV << "canceling backoff timer\n";
+    cancelEvent(endBackoff);
+}
+
 /****************************************************************
  * Frame sender functions.
  */
@@ -547,16 +548,8 @@ void LoRaMac::sendAckFrame()
  */
 void LoRaMac::finishCurrentTransmission()
 {
-    // scheduleAt(simTime() + waitDelay1Time, endDelay_1);
-    // scheduleAt(simTime() + waitDelay1Time + listening1Time, endListening_1);
-    // scheduleAt(simTime() + waitDelay1Time + listening1Time + waitDelay2Time, endDelay_2);
-    // scheduleAt(simTime() + waitDelay1Time + listening1Time + waitDelay2Time + listening2Time, endListening_2);
-    scheduleAt(simTime(), endDelay_1);
-    scheduleAt(simTime(), endListening_1);
-    scheduleAt(simTime(), endDelay_2);
-    scheduleAt(simTime(), endListening_2);
     deleteCurrentTxFrame();
-    //popTxQueue();
+    resetTransmissionVariables();
 }
 
 Packet *LoRaMac::getCurrentTransmission()
@@ -565,9 +558,20 @@ Packet *LoRaMac::getCurrentTransmission()
     return currentTxFrame;
 }
 
+void LoRaMac::resetTransmissionVariables()
+{
+    backoffPeriod = -1;
+    retryCounter = 0;
+}
+
 bool LoRaMac::isReceiving()
 {
     return radio->getReceptionState() == IRadio::RECEPTION_STATE_RECEIVING;
+}
+
+bool LoRaMac::isMediumFree()
+{
+    return radio->getReceptionState() == IRadio::RECEPTION_STATE_IDLE;
 }
 
 bool LoRaMac::isAck(const Ptr<const LoRaMacFrame> &frame)
@@ -597,8 +601,7 @@ void LoRaMac::turnOffReceiver()
 {
     LoRaRadio *loraRadio;
     loraRadio = check_and_cast<LoRaRadio *>(radio);
-    // loraRadio->setRadioMode(IRadio::RADIO_MODE_SLEEP);
-    loraRadio->setRadioMode(IRadio::RADIO_MODE_RECEIVER);
+    loraRadio->setRadioMode(IRadio::RADIO_MODE_SLEEP);
 }
 
 MacAddress LoRaMac::getAddress()

@@ -41,6 +41,7 @@ namespace flora {
 Define_Module(LoRaNodeApp);
 
 simsignal_t LoRaNodeApp::appModeChangedSignal = cComponent::registerSignal("appModeChanged");
+simsignal_t LoRaNodeApp::commActiveChangedSignal = cComponent::registerSignal("commActiveChanged");
 cEnum *LoRaNodeApp::appModeEnum = nullptr;
 
 Register_Enum(LoRaNodeApp::AppMode,
@@ -85,8 +86,8 @@ void LoRaNodeApp::initialize(int stage) {
         } else if (strcmp(host->par("deploymentType").stringValue(), "grid") == 0) {
             int minX = (int)host->par("minX").doubleValue();
             int sepX = (int)host->par("sepX").doubleValue();
-            int minY = (int)host->par("minX").doubleValue();
-            int sepY = (int)host->par("sepX").doubleValue();
+            int minY = (int)host->par("minY").doubleValue();
+            int sepY = (int)host->par("sepY").doubleValue();
             int cols = int(sqrt(numberOfNodes));
             StationaryMobility *mobility = check_and_cast<StationaryMobility *>(
                     host->getSubmodule("mobility"));
@@ -129,6 +130,7 @@ void LoRaNodeApp::initialize(int stage) {
         receivedPacketsToForward = 0;
         receivedRoutingPackets = 0;
         receivedDataPackets = 0;
+        receivedDataPacketsNotForMe = 0;
         receivedDataPacketsForMe = 0;
         receivedDataPacketsForMeUnique = 0;
         receivedDataPacketsFromMe = 0;
@@ -294,6 +296,20 @@ void LoRaNodeApp::initialize(int stage) {
         packetsPerSF = par("packetsPerSF");
         packetsInSF = 0;
 
+        // Communication Active Window
+        commActiveState = false;
+        selfCommTimerMsg = new cMessage("selfCommTimerMsg");
+        commActivePeriod = par("commActivePeriod");
+        commActiveDutyCycle = par("commActiveDutyCycle");
+        commActiveTxRatio = par("commActiveTxRatio");
+        cachedDataPktToSendInfo = std::make_pair(nullptr, 0);
+
+        double commActiveWindow = commActivePeriod.dbl()*commActiveDutyCycle;
+        timeToNextCommActivePeriodStart = simTime() + 10*simTimeResolution;
+        timeToNextCommActiveRxOnly = timeToNextCommActivePeriodStart + commActiveTxRatio*commActiveWindow;
+        timeToNextCommActivePeriodEnd = timeToNextCommActivePeriodStart + commActiveWindow;
+        scheduleAt(timeToNextCommActivePeriodStart, selfCommTimerMsg);
+
         //Forwarded packets vector size
         forwardedPacketVectorSize = par("forwardedPacketVectorSize");
 
@@ -309,6 +325,7 @@ void LoRaNodeApp::initialize(int stage) {
             WATCH(receivedPacketsToForward);
             WATCH(receivedRoutingPackets);
             WATCH(receivedDataPackets);
+            WATCH(receivedDataPacketsNotForMe);
             WATCH(receivedDataPacketsForMe);
             WATCH(receivedDataPacketsForMeUnique);
             WATCH(receivedDataPacketsFromMe);
@@ -532,6 +549,7 @@ void LoRaNodeApp::finish() {
     recordScalar("receivedPacketsFromMe", receivedPacketsFromMe);
     recordScalar("receivedPacketsToForward", receivedPacketsToForward);
     recordScalar("receivedDataPackets", receivedDataPackets);
+    recordScalar("receivedDataPacketsNotForMe", receivedDataPacketsNotForMe);
     recordScalar("receivedDataPacketsForMe", receivedDataPacketsForMe);
     recordScalar("receivedDataPacketsForMeUnique", receivedDataPacketsForMeUnique);
     recordScalar("receivedDataPacketsFromMe", receivedDataPacketsFromMe);
@@ -572,7 +590,7 @@ void LoRaNodeApp::finish() {
     recordScalar("firstACKSF", firstACKSF);
 
     recordScalar("dataPacketsNotSent", LoRaPacketsToSend.size());
-    recordScalar("forwardPacketsNotSent", LoRaPacketsToSend.size());
+    recordScalar("forwardPacketsNotSent", LoRaPacketsToForward.size());
 
     recordScalar("forwardBufferFull", forwardBufferFull);
 
@@ -615,15 +633,20 @@ void LoRaNodeApp::finish() {
 }
 
 void LoRaNodeApp::handlePacketTxSelfMessage(cMessage *msg) {
-    // Only proceed to send a data packet if the 'mac' module in 'LoRaNic' is IDLE and the warmup period is due
+    // Only proceed to send a data packet if the 'mac' module in 'LoRaNic' is ACTIVE and the warmup period is due
     LoRaMac *lrmc = (LoRaMac *)getParentModule()->getSubmodule("LoRaNic")->getSubmodule("mac");
+    bool sendSuccess = false;
 
-    if (lrmc->fsm.getState() == IDLE ) {
-        simtime_t txDuration = 0;
+    if (lrmc->fsm.getState() == ACTIVE) {
         bool sendRouting = false;
         bool sendData = false;
 
-        // Check if there are routing packets to send
+        // Since the MAC is active we must have timeToNextCommActivePeriodStart < simTime() < timeToNextCommActivePeriodEnd
+        if (!(simTime() >= timeToNextCommActivePeriodStart && simTime() < timeToNextCommActivePeriodEnd)) {
+            throw cRuntimeError("Attempting Tx outside communication active window");
+        }
+
+        // Check if there are routing packets to send, and if it is time to send them
         if (routingPacketsDue && simTime() >= nextRoutingPacketTransmissionTime) {
             sendRouting = true;
         }
@@ -644,25 +667,58 @@ void LoRaNodeApp::handlePacketTxSelfMessage(cMessage *msg) {
 
         // Send routing packet
         if (sendRouting) {
-            txDuration = sendRoutingPacket();
-            // Calculate next transmission time after sending
-            minNextPacketTransmissionTime = simTime() + (enforceDutyCycle ? txDuration/dutyCycle : txDuration);
-            nextRoutingPacketTransmissionTime = math::maxnan(simTime().dbl() + getTimeToNextRoutingPacket().dbl(), minNextPacketTransmissionTime.dbl());
+            auto pktInfo = getRoutingPacketToSend();
+            auto pkt = pktInfo.first;
+            if (pkt != nullptr) {
+                auto txDuration = pktInfo.second;
+                // Make sure that the Tx duration fits in the comm active Tx window, if not then reschedule
+                bool txInWindow = (simTime() + txDuration) <  timeToNextCommActiveRxOnly;
+                if (txInWindow) {
+                    sendRoutingPacket(pkt);
+
+                    // Calculate next transmission time after sending
+                    minNextPacketTransmissionTime = simTime() + (enforceDutyCycle ? txDuration/dutyCycle : txDuration);
+                    nextRoutingPacketTransmissionTime = math::maxnan(simTime().dbl() + getTimeToNextRoutingPacket().dbl(), minNextPacketTransmissionTime.dbl());
+
+                    sendSuccess = true;
+                } else {
+                    // Cache packet info for later transmission
+                    EV_INFO << "Tx not in window for routing packet, caching..." << endl;
+                    cachedRoutingPktToSendInfo = pktInfo;
+                }
+            }
         }
         // Send or forward data packet
         else if (sendData) {
-            txDuration = sendDataPacket();
-            // Calculate next transmission time after sending
-            minNextPacketTransmissionTime = simTime() + (enforceDutyCycle ? txDuration/dutyCycle : txDuration);
-            nextDataPacketTransmissionTime = minNextPacketTransmissionTime;
+            auto pktInfo = getDataPacketToSend();
+            auto pkt = pktInfo.first;
+            if (pkt != nullptr) {
+                auto txDuration = pktInfo.second;
+                // Make sure that the Tx duration fits in the comm active Tx window, if not then reschedule
+                bool txInWindow = (simTime() + txDuration) <  timeToNextCommActiveRxOnly;
+                if (txInWindow) {
+                    sendDataPacket(pkt);
 
-            if (LoRaPacketsToSend.size() > 0 || LoRaPacketsToForward.size() > 0) {
-                dataPacketsDue = true;
-            } else {
-                dataPacketsDue = false;
+                    // Calculate next transmission time after sending
+                    minNextPacketTransmissionTime = simTime() + (enforceDutyCycle ? txDuration/dutyCycle : txDuration);
+                    nextDataPacketTransmissionTime = minNextPacketTransmissionTime;
+
+                    if (LoRaPacketsToSend.size() > 0 || LoRaPacketsToForward.size() > 0) {
+                        dataPacketsDue = true;
+                    } else {
+                        dataPacketsDue = false;
+                    }
+                    sendSuccess = true;
+                } else {
+                    // Cache packet info for later transmission
+                    EV_INFO << "Tx not in window for local or forward data packet, caching..." << endl;
+                    cachedDataPktToSendInfo = pktInfo;
+                }
             }
         }
+    }
 
+    if (sendSuccess) {
         simtime_t nextScheduleTime = 0;
 
         if (routingPacketsDue && dataPacketsDue) {
@@ -685,9 +741,15 @@ void LoRaNodeApp::handlePacketTxSelfMessage(cMessage *msg) {
         if (routingPacketsDue || dataPacketsDue) {
             scheduleAt(nextScheduleTime + 10*simTimeResolution, selfPacketTxMsg);
         }
-    }
-    else {
-        scheduleAt(simTime() + 10*simTimeResolution, selfPacketTxMsg);
+    } else {
+        EV_INFO << "Scheduling Tx for start of next active period" << endl;
+        simtime_t nextScheduleTime = 0;
+        if (simTime() > timeToNextCommActivePeriodStart) {
+            nextScheduleTime = timeToNextCommActivePeriodStart + commActivePeriod;
+        } else {
+            nextScheduleTime = timeToNextCommActivePeriodStart;
+        }
+        scheduleAt(nextScheduleTime + 10*simTimeResolution, selfPacketTxMsg);
     }
 }
 
@@ -733,6 +795,23 @@ void LoRaNodeApp::handleAppModeSwitchTimerSelfMessage(cMessage *msg) {
     completeAppModeSwitch(nextAppMode);
 }
 
+void LoRaNodeApp::handleCommTimerSelfMessage(cMessage *msg) {
+
+    if (!commActiveState) {
+        // Start window and schedule end
+        scheduleAt(timeToNextCommActivePeriodEnd, selfCommTimerMsg);
+        setCommActiveState(true);
+    } else {
+        // End window and schedule start
+        double commActiveWindow = commActivePeriod.dbl()*commActiveDutyCycle;
+        timeToNextCommActivePeriodStart = simTime() + (1-commActiveDutyCycle) * commActivePeriod;
+        timeToNextCommActiveRxOnly = timeToNextCommActivePeriodStart + commActiveTxRatio*commActiveWindow;
+        timeToNextCommActivePeriodEnd = timeToNextCommActivePeriodStart + commActiveWindow;
+        scheduleAt(timeToNextCommActivePeriodStart, selfCommTimerMsg);
+        setCommActiveState(false);
+    }
+}
+
 void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
 
     if (msg == selfPacketTxMsg) {
@@ -741,6 +820,8 @@ void LoRaNodeApp::handleSelfMessage(cMessage *msg) {
         handleTaskTimerSelfMessage(msg);
     } else if (msg == selfAppModeSwitchTimerMsg) {
         handleAppModeSwitchTimerSelfMessage(msg);
+    } else if (msg == selfCommTimerMsg){
+        handleCommTimerSelfMessage(msg);
     } else {
         throw cRuntimeError("Unknown self message");
     }
@@ -763,6 +844,7 @@ void LoRaNodeApp::generateFireAlarmPacket() {
     dataPacket->setDepartureTime(simTime());
     dataPacket->setTtl(packetTTL);
 
+    LoRaPacketsToSend.clear();
     LoRaPacketsToSend.push_back(*dataPacket);
 }
 
@@ -821,6 +903,8 @@ void LoRaNodeApp::handleMessageFromLowerLayer(cMessage *msg) {
         else {
             bubble("Unicast message not for me!");
             receivedDataPackets++;
+            receivedDataPacketsNotForMe++;
+            EV_INFO << "Unicast data packet not for me: via=" << packet->getVia() << endl;
             lastDataPacketReceptionTime = simTime();
         }
     }
@@ -1265,19 +1349,24 @@ void LoRaNodeApp::manageReceivedAckPacketForMe(cMessage *msg) {
             << endl;
 }
 
-simtime_t LoRaNodeApp::sendDataPacket() {
-    bool localData = true;
+std::pair<Packet *, simtime_t> LoRaNodeApp::getDataPacketToSend() {
     bool transmit = false;
     simtime_t txDuration = 0;
     std::string fullName = "";
     auto dataPacket = makeShared<LoRaAppPacket>();
+    Packet *dataPkt = nullptr;
     int customSF = -1; // If -1 use getSF()
 
+    // Send cached data packet from previous attempt
+    if (cachedDataPktToSendInfo.first != nullptr) {
+        auto pktInfo = cachedDataPktToSendInfo;
+        cachedDataPktToSendInfo.first = nullptr;
+        EV_INFO << "Getting cached data packet" << endl;
+        return pktInfo;
+    }
     // Send local data packets with a configurable ownDataPriority priority over packets to forward, if there is any
-    if ((LoRaPacketsToSend.size() > 0 && bernoulli(ownDataPriority))
-            || (LoRaPacketsToSend.size() > 0 && LoRaPacketsToForward.size() == 0)) {
-
-        bubble("Sending a local data packet!");
+    else if ((LoRaPacketsToSend.size() > 0 && bernoulli(ownDataPriority))
+             || (LoRaPacketsToSend.size() > 0 && LoRaPacketsToForward.size() == 0)) {
 
         // Name packets to ease tracking
         const char* addName = "Orig";
@@ -1310,12 +1399,8 @@ simtime_t LoRaNodeApp::sendDataPacket() {
             firstDataPacketTransmissionTime = simTime();
         lastDataPacketTransmissionTime = simTime();
     }
-
     // Forward other nodes' packets, if any
     else if (LoRaPacketsToForward.size() > 0) {
-
-        bubble("Forwarding a packet!");
-        localData = false;
 
         const char* addName = "Fwd";
         fullName += addName;
@@ -1384,8 +1469,6 @@ simtime_t LoRaNodeApp::sendDataPacket() {
     }
 
     if (transmit) {
-        sentPackets++;
-
         const char* ownName = "Tx";
         fullName += ownName;
 
@@ -1403,13 +1486,10 @@ simtime_t LoRaNodeApp::sendDataPacket() {
             case RSSI_PROD_SINGLE_SF:
             case ETX_SINGLE_SF:
                 if ( routeIndex >= 0 )
+                    // dataPacket->setVia(BROADCAST_ADDRESS);
                     dataPacket->setVia(singleMetricRoutingTable[routeIndex].via);
                 else {
                     dataPacket->setVia(BROADCAST_ADDRESS);
-                    if (localData)
-                        broadcastDataPackets++;
-                    else
-                        broadcastForwardedPackets++;
                 }
                 break;
             case TIME_ON_AIR_RMP1_CAD_MULTI_SF:
@@ -1431,44 +1511,33 @@ simtime_t LoRaNodeApp::sendDataPacket() {
                 }
                 else {
                     dataPacket->setVia(BROADCAST_ADDRESS);
-                    if (localData)
-                        broadcastDataPackets++;
-                    else
-                        broadcastForwardedPackets++;
                 }
                 break;
         }
 
-        allTxPacketsSFStats.collect(getSF());
-        if (localData) {
-            owndataTxPacketsSFStats.collect(getSF());
-        }
-        else {
-            fwdTxPacketsSFStats.collect(getSF());
-        }
-
-        Packet *dataPkt = new Packet(fullName.c_str());
+        dataPkt = new Packet(fullName.c_str());
         dataPkt->insertAtFront(dataPacket);
         setLoRaTagToPkt(dataPkt, customSF);
         txDuration = calculateTransmissionDuration(dataPkt);
-
-        send(dataPkt, "socketOut");
-
-        txSfVector.record(getSF());
-        txTpVector.record(getTP());
-        emit(LoRa_AppPacketSent, getSF());
     }
 
-    return txDuration;
+    return std::make_pair(transmit ? dataPkt : nullptr, txDuration);
 }
 
-simtime_t LoRaNodeApp::sendRoutingPacket() {
-
+std::pair<Packet *, simtime_t> LoRaNodeApp::getRoutingPacketToSend() {
     bool transmit = false;
     simtime_t txDuration = 0;
     int numberOfRoutes = 0;
-
     auto routingPacket = makeShared<LoRaAppPacket>();
+    Packet *routingPkt = nullptr;
+
+    // Send cached routing packet from previous attempt
+    if (cachedRoutingPktToSendInfo.first != nullptr) {
+        auto pktInfo = cachedRoutingPktToSendInfo;
+        cachedRoutingPktToSendInfo.first = nullptr;
+        EV_INFO << "Getting cached routing packet" << endl;
+        return pktInfo;
+    }
 
     sanitizeRoutingTable();
 
@@ -1566,12 +1635,8 @@ simtime_t LoRaNodeApp::sendRoutingPacket() {
            break;
     }
 
-
     if (transmit) {
-        sentPackets++;
-        sentRoutingPackets++;
         //add LoRa control info
-
         routingPacket->setMsgType(ROUTING);
         routingPacket->setDataInt(sentRoutingPackets);
         routingPacket->setSource(nodeId);
@@ -1583,116 +1648,70 @@ simtime_t LoRaNodeApp::sendRoutingPacket() {
         routingPacket->setChunkLength(B(routingPacketMaxSize));
         routingPacket->setDepartureTime(simTime());
 
-        txSfVector.record(getSF());
-        txTpVector.record(getTP());
-
-        allTxPacketsSFStats.collect(getSF());
-        routingTxPacketsSFStats.collect(getSF());
-
-        Packet *routingPkt = new Packet("RoutingPacket");
+        routingPkt = new Packet("RoutingPacket");
         routingPkt->insertAtFront(routingPacket);
         setLoRaTagToPkt(routingPkt);
         txDuration = calculateTransmissionDuration(routingPkt);
-
-        send(routingPkt, "socketOut");
-        bubble("Sending routing packet");
-        emit(LoRa_AppPacketSent, getSF());
     }
-    return txDuration;
+    return std::make_pair(transmit ? routingPkt : nullptr, txDuration);
 }
 
-//void LoRaNodeApp::generateDataPackets() {
-//
-//    if (!onlyNode0SendsPackets || nodeId == 0) {
-//        std::vector<int> destinations = { };
-//
-//        if (numberOfDestinationsPerNode == 0 )
-//            numberOfDestinationsPerNode = numberOfNodes-1;
-//
-//        while (destinations.size() < numberOfDestinationsPerNode
-//                && numberOfNodes - 1 - destinations.size() > 0) {
-//
-//            int destination = intuniform(0, numberOfNodes - 1);
-//
-//            if (destination != nodeId) {
-//                bool newDestination = true;
-//
-//                for (int i = 0; i < destinations.size(); i++) {
-//                    if (destination == destinations[i]) {
-//                        newDestination = false;
-//                        break;
-//                    }
-//                }
-//
-//                if (newDestination) {
-//                    destinations.push_back(destination);
-//                }
-//            }
-//        }
-//
-//        for (int k = 0; k < numberOfPacketsPerDestination; k++) {
-//            for (int j = 0; j < destinations.size(); j++) {
-//                auto dataPacket = makeShared<LoRaAppPacket>();
-//
-//                dataPacket->setMsgType(DATA);
-//                dataPacket->setDataInt(currDataInt+k);
-//                dataPacket->setSource(nodeId);
-//                dataPacket->setVia(nodeId);
-//                dataPacket->setDestination(destinations[j]);
-//                LoRaOptions opts = dataPacket->getOptions();
-//                opts.setAppACKReq(requestACKfromApp);
-//                dataPacket->setOptions(opts);
-//                dataPacket->setChunkLength(B(dataPacketSize));
-//                dataPacket->setDepartureTime(simTime());
-//
-//                switch (routingMetric) {
-//    //            case 0:
-//    //                dataPacket->setTtl(1);
-//    //                break;
-//                default:
-//                    dataPacket->setTtl(packetTTL);
-//                    break;
-//                }
-//
-//                LoRaPacketsToSend.push_back(*dataPacket);
-//            }
-//            currDataInt++;
-//        }
-//    }
-//}
-//
-//void LoRaNodeApp::generateDataPackets2() {
-//
-//    if (nodeId == 0) {
-//        int destination = 2;
-//
-//        for (int k = 0; k < numberOfPacketsPerDestination; k++) {
-//                auto dataPacket = makeShared<LoRaAppPacket>();
-//
-//                dataPacket->setMsgType(DATA);
-//                dataPacket->setDataInt(currDataInt+k);
-//                dataPacket->setSource(nodeId);
-//                dataPacket->setVia(nodeId);
-//                dataPacket->setDestination(destination);
-//                LoRaOptions opts = dataPacket->getOptions();
-//                opts.setAppACKReq(requestACKfromApp);
-//                dataPacket->setOptions(opts);
-//                dataPacket->setChunkLength(B(dataPacketSize));
-//                dataPacket->setDepartureTime(simTime());
-//
-//                switch (routingMetric) {
-//    //            case 0:
-//    //                dataPacket->setTtl(1);
-//    //                break;
-//                default:
-//                    dataPacket->setTtl(packetTTL);
-//                    break;
-//                }
-//                LoRaPacketsToSend.push_back(*dataPacket);
-//            }
-//            currDataInt++;
-//        }
-//}
+void LoRaNodeApp::sendDataPacket(Packet *pkt) {
+    const auto & packet = pkt->peekAtFront<LoRaAppPacket>();
+    auto tag = pkt->getTag<LoRaTag>();
+    int sf = tag->getSpreadFactor();
+    int tp = (int)math::mW2dBmW(tag->getPower().get());
+    bool localData = (packet->getSource() == nodeId);
+
+    if (packet->getVia() == BROADCAST_ADDRESS) {
+        if (localData)
+            broadcastDataPackets++;
+        else
+            broadcastForwardedPackets++;
+    }
+
+    if (localData) {
+        EV_INFO << "Sending data packet" << endl;
+        // bubble("Sending data packet");
+    }
+    else {
+        EV_INFO << "Forwarding data packet" << endl;
+        // bubble("Forwarding data packet");
+    }
+
+    send(pkt, "socketOut");
+    sentPackets++;
+
+    allTxPacketsSFStats.collect(sf);
+    if (localData) {
+        owndataTxPacketsSFStats.collect(sf);
+    }
+    else {
+        fwdTxPacketsSFStats.collect(sf);
+    }
+    txSfVector.record(sf);
+    txTpVector.record(tp);
+    emit(LoRa_AppPacketSent, sf);
+}
+
+void LoRaNodeApp::sendRoutingPacket(Packet *pkt) {
+    const auto & packet = pkt->peekAtFront<LoRaAppPacket>();
+    auto tag = pkt->getTag<LoRaTag>();
+    int sf = tag->getSpreadFactor();
+    int tp = (int)math::mW2dBmW(tag->getPower().get());
+
+    EV_INFO << "Sending routing packet" << endl;
+    // bubble("Sending routing packet");
+    send(pkt, "socketOut");
+    sentPackets++;
+    sentRoutingPackets++;
+
+    allTxPacketsSFStats.collect(sf);
+    routingTxPacketsSFStats.collect(sf);
+    txSfVector.record(sf);
+    txTpVector.record(tp);
+    emit(LoRa_AppPacketSent, sf);
+}
 
 void LoRaNodeApp::increaseSFIfPossible() {
     if (getSF() < 12) {
@@ -2107,6 +2126,13 @@ void LoRaNodeApp::setLoRaTagToPkt(Packet *packet, int customSF) {
     loraTag->setSpreadFactor((customSF != -1) ? customSF : getSF());
     loraTag->setCodeRendundance(getCR());
     loraTag->setPower(mW(math::dBmW2mW(getTP())));
+}
+
+void LoRaNodeApp::setCommActiveState(bool state) {
+    if (state != commActiveState) {
+        emit(commActiveChangedSignal, (intval_t)state);
+        commActiveState = state;
+    }
 }
 
 } //end namespace inet

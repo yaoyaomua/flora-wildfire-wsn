@@ -47,6 +47,7 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         simsignal_t LoRa_AppPacketSent;
 
         static simsignal_t appModeChangedSignal;
+        static simsignal_t commActiveChangedSignal;
 
         enum AppMode {
             APP_MODE_SLEEP,
@@ -85,8 +86,10 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
 
         simtime_t getTimeToNextRoutingPacket();
 
-        simtime_t sendRoutingPacket();
-        simtime_t sendDataPacket();
+        std::pair<Packet *, simtime_t> getRoutingPacketToSend();
+        std::pair<Packet *, simtime_t> getDataPacketToSend();
+        void sendRoutingPacket(Packet *pkt);
+        void sendDataPacket(Packet *pkt);
         void manageReceivedPacketForMe(cMessage *msg);
         void manageReceivedAckPacketForMe(cMessage *msg);
         void manageReceivedDataPacketForMe(cMessage *msg);
@@ -122,6 +125,7 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         int receivedPacketsFromMe;
         int receivedPacketsToForward;
         int receivedDataPackets;
+        int receivedDataPacketsNotForMe;
         int receivedDataPacketsForMe;
         int receivedDataPacketsForMeUnique;
         int receivedDataPacketsFromMe;
@@ -184,6 +188,7 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
 
         cMessage *selfPacketTxMsg;
         cMessage *selfTaskTimerMsg;
+        cMessage *selfCommTimerMsg;
 
         //history of sent packets;
         cOutVector txSfVector;
@@ -276,6 +281,17 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         bool fireAlarmOnce;
         bool fireAlarmTriggered;
 
+        bool commActiveState;
+        simtime_t commActivePeriod;
+        double commActiveDutyCycle;
+        double commActiveTxRatio;
+        simtime_t timeToNextCommActivePeriodStart;
+        simtime_t timeToNextCommActiveRxOnly;
+        simtime_t timeToNextCommActivePeriodEnd;
+
+        std::pair<Packet *, simtime_t> cachedDataPktToSendInfo;
+        std::pair<Packet *, simtime_t> cachedRoutingPktToSendInfo;
+
         // Routing tables
         class singleMetricRoute {
 
@@ -309,13 +325,11 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         //@{
         enum State {
             IDLE,
+            ACTIVE,
+            DEFER,
+            BACKOFF,
             TRANSMIT,
-            WAIT_DELAY_1,
-            LISTENING_1,
-            RECEIVING_1,
-            WAIT_DELAY_2,
-            LISTENING_2,
-            RECEIVING_2,
+            RECEIVING,
         };
 
         //LoRa parameters control
@@ -344,8 +358,10 @@ class LoRaNodeApp : public cSimpleModule, public ILifecycle
         void parseAppModeSwitchingTimes();
         void startAppModeSwitch(AppMode newAppMode, simtime_t switchingTime);
         void completeAppModeSwitch(AppMode newAppMode);
+        void setCommActiveState(bool state);
         void handlePacketTxSelfMessage(cMessage *msg);
         void handleTaskTimerSelfMessage(cMessage *msg);
+        void handleCommTimerSelfMessage(cMessage *msg);
         void handleAppModeSwitchTimerSelfMessage(cMessage *msg);
         void cleanTeardown(void);
 };

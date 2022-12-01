@@ -91,6 +91,13 @@ simple LoRaNodeApp like IApp
         bool fireAlarmEnable = default(false);
         bool fireAlarmOnce = default(false);
 
+        volatile double commActivePeriod @unit(s) = default(60s);
+        double commActiveDutyCycle = default(0.1);
+        double commActiveTxRatio = default(0.9); // fraction of time at in commActive window during which Tx is allowed (after this only Rx)
+
+        @signal[commActiveChanged](type=long);
+        @statistic[commActive](title="Communication Active"; source=commActiveChanged; record=count,vector; interpolationmode=sample-hold);
+
         @signal[appModeChanged](type=long);
         @statistic[appMode](title="App mode"; source=appModeChanged; record=count,vector; interpolationmode=sample-hold);
 
