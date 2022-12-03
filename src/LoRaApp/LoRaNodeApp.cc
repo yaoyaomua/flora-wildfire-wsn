@@ -86,8 +86,8 @@ void LoRaNodeApp::initialize(int stage) {
         } else if (strcmp(host->par("deploymentType").stringValue(), "grid") == 0) {
             int minX = (int)host->par("minX").doubleValue();
             int sepX = (int)host->par("sepX").doubleValue();
-            int minY = (int)host->par("minY").doubleValue();
-            int sepY = (int)host->par("sepY").doubleValue();
+            int minY = (int)host->par("minX").doubleValue();
+            int sepY = (int)host->par("sepX").doubleValue();
             int cols = int(sqrt(numberOfNodes));
             StationaryMobility *mobility = check_and_cast<StationaryMobility *>(
                     host->getSubmodule("mobility"));
