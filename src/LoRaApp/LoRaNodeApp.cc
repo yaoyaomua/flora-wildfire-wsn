@@ -1384,6 +1384,7 @@ std::pair<Packet *, simtime_t> LoRaNodeApp::getDataPacketToSend() {
         opts.setAppACKReq(LoRaPacketsToSend.front().getOptions().getAppACKReq());
         dataPacket->setOptions(opts);
         dataPacket->setChunkLength(B(LoRaPacketsToSend.front().getChunkLength()));
+        // dataPacket->setDepartureTime(LoRaPacketsToSend.front().getDepartureTime());
         dataPacket->setDepartureTime(simTime());
 
         addName = "Dest";

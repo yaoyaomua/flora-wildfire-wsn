@@ -132,6 +132,8 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     long numReceived;
     long numSentBroadcast;
     long numReceivedBroadcast;
+    long endActiveWhileReceiving;
+    long endActiveWhileTransmitting;
     //@}
 
   public:

@@ -107,6 +107,8 @@ void LoRaMac::initialize(int stage)
         numReceived = 0;
         numSentBroadcast = 0;
         numReceivedBroadcast = 0;
+        endActiveWhileReceiving = 0;
+        endActiveWhileTransmitting = 0;
 
         // initialize watches
         if (getEnvir()->isGUI()) {
@@ -137,6 +139,8 @@ void LoRaMac::finish()
     recordScalar("numReceived", numReceived);
     recordScalar("numSentBroadcast", numSentBroadcast);
     recordScalar("numReceivedBroadcast", numReceivedBroadcast);
+    recordScalar("endActiveWhileReceiving", endActiveWhileReceiving);
+    recordScalar("endActiveWhileTransmitting", endActiveWhileTransmitting);
 }
 
 void LoRaMac::configureNetworkInterface()
@@ -256,8 +260,11 @@ void LoRaMac::handleWithFsm(cMessage *msg)
     }
     EV_INFO << "handling packet with handleWithFsm(): " << fsm << endl;
 
-    if (fsm.getState() != ACTIVE && msg == endActive) {
-        throw cRuntimeError("End Active triggered while not in state");
+    if (msg == endActive &&
+        fsm.getState() != ACTIVE &&
+        fsm.getState() != RECEIVING &&
+        fsm.getState() != TRANSMIT) {
+        throw cRuntimeError("End Active triggered in unsupported state");
     }
 
     FSMA_Switch(fsm)
@@ -334,6 +341,13 @@ void LoRaMac::handleWithFsm(cMessage *msg)
                 finishCurrentTransmission();
                 numSent++;
             );
+            FSMA_Event_Transition(Transmit-EndActive,
+                                  msg == endActive,
+                                  IDLE,
+                EV_WARN << "Disabling communication while transmitting!" << endl;
+                finishCurrentTransmission();
+                endActiveWhileTransmitting++;
+            );
         }
         FSMA_State(RECEIVING)
         {
@@ -348,6 +362,12 @@ void LoRaMac::handleWithFsm(cMessage *msg)
             FSMA_Event_Transition(Receive-BelowSensitivity,
                                   msg == droppedPacket,
                                   ACTIVE,
+            );
+            FSMA_Event_Transition(Receive-EndActive,
+                                  msg == endActive,
+                                  IDLE,
+                EV_WARN << "Disabling communication while receiving!" << endl;
+                endActiveWhileReceiving++;
             );
         }
     }
@@ -487,6 +507,9 @@ void LoRaMac::scheduleBackoffTimer()
     EV << "scheduling backoff timer\n";
     if (isInvalidBackoffPeriod())
         generateBackoffPeriod();
+
+    // HACK: Try to handle corner case
+    cancelBackoffTimer();
     scheduleAfter(backoffPeriod, endBackoff);
 }
 
